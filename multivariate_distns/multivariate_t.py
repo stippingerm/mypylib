@@ -15,6 +15,12 @@ from scipy.stats._multivariate import _PSD, _squeeze_output, _eigvalsh_to_eps, _
 from scipy.stats._discrete_distns import binom
 from scipy.stats import mvn
 
+# Some easy references:
+# https://stats.stackexchange.com/questions/68476/drawing-from-the-multivariate-students-t-distribution
+# https://stackoverflow.com/questions/29798795/multivariate-student-t-distribution-with-python
+# https://stats.stackexchange.com/questions/55581/entropy-of-noncentral-multivariate-t-distribution
+# https://journal.r-project.org/archive/2013/RJ-2013-033/RJ-2013-033.pdf
+
 __all__ = ['multivariate_t',
            ]
 
@@ -205,14 +211,14 @@ class multivariate_t_gen(multi_rv_generic):
         super(multivariate_t_gen, self).__init__(seed)
         self.__doc__ = doccer.docformat(self.__doc__, mvt_docdict_params)
 
-    def __call__(self, mean=None, cov=1, allow_singular=False, seed=None):
+    def __call__(self, df, mean=None, cov=1, allow_singular=False, seed=None):
         """
         Create a frozen multivariate Student's T distribution.
 
         See `multivariate_t_frozen` for more information.
 
         """
-        return multivariate_t_frozen(mean, cov,
+        return multivariate_t_frozen(df, mean, cov,
                                           allow_singular=allow_singular,
                                           seed=seed)
 
@@ -326,8 +332,8 @@ class multivariate_t_gen(multi_rv_generic):
         """
         dev = x - mean
         maha = log1p(np.sum(np.square(np.dot(dev, prec_U)), axis=-1) / df)
-        pref = gammaln(0.5 * (df+rank)) - gammaln(0.5 * df)
-        return pref -0.5 * (rank * (df+_LOG_PI) + log_det_cov + (df+rank) * maha)
+        gams = gammaln(0.5 * (df+rank)) - gammaln(0.5 * df)
+        return gams -0.5 * (rank * (np.log(df)+_LOG_PI) + log_det_cov + (df+rank) * maha)
 
     def logpdf(self, x, df, mean=None, cov=1, allow_singular=False):
         """
