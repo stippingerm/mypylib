@@ -371,6 +371,7 @@ class GaussianClassifier(MixtureClassifierMixin, GaussianMixture):
         self.counts_init = counts_init
         self.progress_bar = _no_progress_bar if progress_bar is None else progress_bar
 
+
     def decision_function(self, X):
         """Predict the labels for the data samples in X using trained model.
 
@@ -382,24 +383,26 @@ class GaussianClassifier(MixtureClassifierMixin, GaussianMixture):
 
         Returns
         -------
-        labels : array, shape (n_samples,)
-            Component labels.
+        ret : array, shape (n_samples, n_classes)
+            Component likelihoods.
         """
         self._check_is_fitted()
         X = _check_X(X, n_features=self.means_.shape[1])
         n_integral_points = self.n_integral_points
-        saved_params = self._get_parameters()
+        hyper_params = self._get_parameters()
         ret = np.array([[0]], dtype=float)
 
+        from .simple_gaussian_mixture import GaussianClassifier as SGM
+        sgm = SGM(covariance_type=self.covariance_type, use_weights=self.use_weights)
         for base_params in self.progress_bar(
-                self._sample_base_params(saved_params, n_integral_points)):
-            super(GaussianClassifier, self)._set_parameters(base_params)
+                self._sample_base_params(hyper_params, n_integral_points)):
+            sgm._set_parameters(base_params)
             if self.use_weights:
-                ret = self._estimate_weighted_log_prob(X) + ret
+                ret = ret + sgm._estimate_weighted_log_prob(X)
             else:
-                ret = self._estimate_log_prob(X) + ret
-        self._set_parameters(saved_params)
+                ret = ret + sgm._estimate_log_prob(X)
         return ret / n_integral_points
+
 
     def _sample_base_params(self, hyper_params, n_integral_points):
         """Predict the labels for the data samples in X using trained model.
@@ -423,7 +426,7 @@ class GaussianClassifier(MixtureClassifierMixin, GaussianMixture):
                 counts_, means_, counts_, covariances_, self.covariance_type, self.random_state)
             precisions_cholesky = _compute_precision_cholesky(
                 covariances, self.covariance_type)
-            yield weights_, means, covariances, precisions_cholesky
+            yield classes_, weights_, means, covariances, precisions_cholesky
 
     def fit(self, X, y):
         classes_, self.counts_ = np.unique(y, return_counts=True)
