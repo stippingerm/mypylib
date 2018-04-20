@@ -12,6 +12,7 @@ import numpy as np
 
 # sklearn.mixture.gaussian_mixture
 from sklearn.mixture.gaussian_mixture import GaussianMixture, _compute_precision_cholesky
+from .simple_gaussian_mixture import _fullCorr, _tiedCorr, _diagCorr, _sphericalCorr
 from sklearn.utils import check_array
 from sklearn.utils.validation import check_is_fitted
 # sklearn.mixture.base
@@ -448,42 +449,6 @@ class GaussianClassifier(MixtureClassifierMixin, GaussianMixture):
         (self.classes_, self.counts_, *base_params) = params
         super(GaussianClassifier, self)._set_parameters(base_params)
 
-
-def _exampleNormal(n_features, beta_param=1, random_state=None):
-    from scipy.stats import beta, expon
-    # partial correlations between [-1,1]
-    P = beta.rvs(beta_param, beta_param, size=(n_features, n_features),
-                 random_state=random_state) * 2 - 1
-    amp = np.diag(np.sqrt(expon.rvs(size=(n_features,), random_state=random_state)))
-    return np.dot(np.dot(amp, vineCorr(P)), amp)
-
-
-def _fullCorr(n_components, n_features, beta_param=1, random_state=None):
-    corr = [_exampleNormal(n_features, beta_param, random_state) for _ in range(0, n_components)]
-    inv = [np.linalg.inv(a) for a in corr]
-    return np.array(corr), np.array(inv)
-
-
-def _tiedCorr(n_components, n_features, beta_param=1, random_state=None):
-    del n_components
-    corr = _exampleNormal(n_features, beta_param, random_state)
-    inv = np.linalg.inv(corr)
-    return corr, inv
-
-
-def _diagCorr(n_components, n_features, expon_param=1, random_state=None):
-    from scipy.stats import expon
-    corr = expon.rvs(0, expon_param, size=(n_components, n_features), random_state=random_state)
-    inv = 1.0 / corr
-    return corr, inv
-
-
-def _sphericalCorr(n_components, n_features, expon_param=1, random_state=None):
-    from scipy.stats import expon
-    del n_features
-    corr = expon.rvs(0, expon_param, size=(n_components,), random_state=random_state)
-    inv = 1.0 / corr
-    return corr, inv
 
 
 def exampleClassifier(n_components, n_features, covariance_type='full', random_state=None):
