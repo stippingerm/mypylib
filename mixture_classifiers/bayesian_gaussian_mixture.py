@@ -56,8 +56,8 @@ def _sample_gaussian_parameters_full(count_mean, hyper_mean, count_covar, hyper_
         The covariance matrix of the current components.
     """
     from scipy.stats import invwishart, wishart, multivariate_normal as mnorm
-    # precisions = [wishart.rvs(n, pre, random_state=random_state) for pre, n in zip(hyper_precis, count_precis)]
-    covariances = [invwishart.rvs(n, cov, random_state=random_state) for cov, n in zip(hyper_covar, count_covar)]
+    # precisions = [wishart.rvs(n, pre / n, random_state=random_state) for pre, n in zip(hyper_precis, count_precis)]
+    covariances = [invwishart.rvs(n, cov * n, random_state=random_state) for cov, n in zip(hyper_covar, count_covar)]
     means = [mnorm.rvs(m, cov / n, random_state=random_state) for m, cov, n in zip(hyper_mean, covariances, count_mean)]
     return means, covariances
 
@@ -86,8 +86,8 @@ def _sample_gaussian_parameters_tied(count_mean, hyper_mean, count_covar, hyper_
         The covariance matrix of the current components.
     """
     from scipy.stats import invwishart, wishart, multivariate_normal as mnorm
-    # precisions = wishart.rvs(np.sum(count_precis), hyper_precis, random_state=random_state)
-    covariances = invwishart.rvs(np.sum(count_covar), hyper_covar, random_state=random_state)
+    # precisions = wishart.rvs(np.sum(count_precis), hyper_precis / np.sum(count_precis), random_state=random_state)
+    covariances = invwishart.rvs(np.sum(count_covar), hyper_covar * np.sum(count_covar), random_state=random_state)
     means = [mnorm.rvs(m, covariances / n, random_state=random_state) for m, n in zip(hyper_mean, count_mean)]
     return means, covariances
 
@@ -116,9 +116,9 @@ def _sample_gaussian_parameters_diag(count_mean, hyper_mean, count_covar, hyper_
         The covariance matrix of the current components.
     """
     from scipy.stats import invwishart, wishart, norm
-    # precisions = [np.diag(wishart.rvs(n, np.diag(pre), random_state=random_state))
+    # precisions = [np.diag(wishart.rvs(n, np.diag(pre * n), random_state=random_state))
     #               for pre, n in zip(hyper_precis, count_precis)]
-    covariances = [np.diag(invwishart.rvs(n, np.diag(cov), random_state=random_state))
+    covariances = [np.diag(invwishart.rvs(n, np.diag(cov * n), random_state=random_state))
                    for cov, n in zip(hyper_covar, count_covar)]
     means = [norm.rvs(m, cov / n, random_state=random_state) for m, cov, n in zip(hyper_mean, covariances, count_mean)]
     return means, covariances
@@ -148,8 +148,8 @@ def _sample_gaussian_parameters_spherical(count_mean, hyper_mean, count_covar, h
         The covariance matrix of the current components.
     """
     from scipy.stats import invwishart, wishart, norm
-    # precisions = [wishart.rvs(n, pre, random_state=random_state) for pre, n in zip(hyper_precis, count_precis)]
-    covariances = [invwishart.rvs(n, cov, random_state=random_state) for cov, n in zip(hyper_covar, count_covar)]
+    # precisions = [wishart.rvs(n, pre / n, random_state=random_state) for pre, n in zip(hyper_precis, count_precis)]
+    covariances = [invwishart.rvs(n, cov * n, random_state=random_state) for cov, n in zip(hyper_covar, count_covar)]
     means = [norm.rvs(m, cov / n, random_state=random_state) for m, cov, n in zip(hyper_mean, covariances, count_mean)]
     return means, covariances
 
