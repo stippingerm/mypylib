@@ -12,7 +12,6 @@ import numpy as np
 
 from scipy.special import gammaln, log1p
 # sklearn.mixture.gaussian_mixture
-from sklearn.mixture.gaussian_mixture import GaussianMixture, _compute_precision_cholesky
 from sklearn.mixture.gaussian_mixture import GaussianMixture, _compute_precision_cholesky, _compute_log_det_cholesky
 from .simple_gaussian_mixture import _fullCorr, _tiedCorr, _diagCorr, _sphericalCorr
 
@@ -170,7 +169,8 @@ def _sample_gaussian_parameters(count_mean, hyper_mean, count_covar, hyper_covar
         The number of observations used to establish the hyperparameter covariances.
 
     hyper_covar : array-like
-        The hyperparameter covariances.
+        The hyperparameter covariances. The hyperparameter in the Normal-(inverse-)Wishart
+        is the sum of pairwise deviations, i.e., {count_covar[i] * hyper_covar[i] for all i}
 
     covariance_type : {'full', 'tied', 'diag', 'spherical'}
         The type of precision matrices.
@@ -455,7 +455,6 @@ class GaussianClassifier(MixtureClassifierMixin, GaussianMixture):
         self.counts_init = counts_init
         self.progress_bar = _no_progress_bar if progress_bar is None else progress_bar
 
-
     def decision_function(self, X):
         """Predict the labels for the data samples in X using trained model.
 
@@ -557,7 +556,31 @@ class GaussianClassifier(MixtureClassifierMixin, GaussianMixture):
         (self.classes_, self.counts_, *base_params) = params
         super(GaussianClassifier, self)._set_parameters(base_params)
 
+    def _check_log_prob(self, X):
+        # for debug purposes only
+        from multivariate_distns import multivariate_t as MVT
+        e1 = _estimate_log_gaussian_prob(
+            X, self.counts_, self.means_, self.counts_, self.precisions_cholesky_, self.covariance_type)
+        e2 = np.empty_like(e1)
+        d = len(self.means_[0])
+        if self.covariance_type == "full":
+            covariances_ = self.covariances_
+        if self.covariance_type == "tied":
+            covariances_ = [self.covariances_ for k in self.counts_]
+        if self.covariance_type == "diag":
+            covariances_ = [np.diag(c) for c in self.covariances_]
+        if self.covariance_type == "spherical":
+            covariances_ = [np.diag(c*np.ones(d)) for c in self.covariances_]
+        for i, (k, m, c) in enumerate(zip(self.counts_, self.means_, covariances_)):
+            d = len(m)
+            df = k - d + 1
+            cov = (k+1)/(k*(k-d+1)) * k*c
+            mvt = MVT.multivariate_t(df, m, cov)
+            e2[:, i] = mvt.logpdf(X)
+        pass
+
     def _estimate_log_bayesian_prob(self, X):
+        #self._check_log_prob(X)
         return _estimate_log_gaussian_prob(
             X, self.counts_, self.means_, self.counts_, self.precisions_cholesky_, self.covariance_type)
 
