@@ -10,13 +10,17 @@
 
 import numpy as np
 
+from scipy.special import gammaln, log1p
 # sklearn.mixture.gaussian_mixture
 from sklearn.mixture.gaussian_mixture import GaussianMixture, _compute_precision_cholesky
+from sklearn.mixture.gaussian_mixture import GaussianMixture, _compute_precision_cholesky, _compute_log_det_cholesky
 from .simple_gaussian_mixture import _fullCorr, _tiedCorr, _diagCorr, _sphericalCorr
+
 from sklearn.utils import check_array
 from sklearn.utils.validation import check_is_fitted
 # sklearn.mixture.base
 from sklearn.mixture.base import _check_X
+from sklearn.utils.extmath import row_norms
 # classifiers
 
 from .base import MixtureClassifierMixin
@@ -187,6 +191,85 @@ def _sample_gaussian_parameters(count_mean, hyper_mean, count_covar, hyper_covar
                           }[covariance_type](count_mean, hyper_mean, count_covar, hyper_covar, random_state)
     return np.array(means), np.array(covariances)
 
+
+def _estimate_log_gaussian_prob(X, count_mean, means, count_precis, precisions_chol, covariance_type):
+    """Estimate the full Bayesian log Gaussian probability.
+
+    Parameters
+    ----------
+    X : array-like, shape (n_samples, n_features)
+
+    count_mean : array-like, shape (n_components,)
+
+    means : array-like, shape (n_components, n_features)
+
+    count_precis : array-like, shape (n_components,)
+
+    precisions_chol : array-like,
+        Cholesky decompositions of the precision matrices.
+        'full' : shape of (n_components, n_features, n_features)
+        'tied' : shape of (n_features, n_features)
+        'diag' : shape of (n_components, n_features)
+        'spherical' : shape of (n_components,)
+
+    covariance_type : {'full', 'tied', 'diag', 'spherical'}
+
+    Returns
+    -------
+    mx_product : array, shape (n_samples, n_components)
+
+    Notes
+    -----
+    This is the posterior predictive of the Normal-(inverse-)Wishart distribution.
+    It is a multivariate Student's t distribution with
+    * df = count_covar - rank + 1
+    * mean = mean
+    * scale = [ (count_mean + 1) / ( count_mean * (count_covar-rank+1) ) ] * ( count_covar * covar )
+      where the last term is the sum pairwise deviation products which is the parameter of
+      the Normal-(inverse-)Wishart distribution instead of the covariance)
+    """
+    n_samples, n_features = X.shape
+    n_components, _ = means.shape
+    df = count_precis - n_features + 1.0
+
+    if covariance_type == 'tied':
+        scale_pref = (np.sum(count_mean) + 1.0) * np.sum(count_precis) / (
+                (np.sum(count_precis) - n_features + 1.0) * np.sum(count_mean))
+        scale_mx = precisions_chol / np.sqrt(scale_pref)
+    else:
+        scale_pref = (count_mean + 1.0) * count_precis / ((count_precis - n_features + 1.0) * count_mean)
+        scale_mx = np.array([p/np.sqrt(s) for p,s in zip(precisions_chol,scale_pref)])
+    # det(precision_chol) is half of det(precision)
+    log_det = _compute_log_det_cholesky(
+        scale_mx, covariance_type, n_features)
+
+    if covariance_type == 'full':
+        mx_product = np.empty((n_samples, n_components))
+        for k, (mu, prec_chol) in enumerate(zip(means, scale_mx)):
+            y = np.dot(X, prec_chol) - np.dot(mu, prec_chol)
+            mx_product[:, k] = np.sum(np.square(y), axis=1)
+
+    elif covariance_type == 'tied':
+        mx_product = np.empty((n_samples, n_components))
+        for k, mu in enumerate(means):
+            y = np.dot(X, scale_mx) - np.dot(mu, scale_mx)
+            mx_product[:, k] = np.sum(np.square(y), axis=1)
+
+    elif covariance_type == 'diag':
+        precisions = scale_mx ** 2
+        mx_product = (np.sum((means ** 2 * precisions), 1) -
+                      2. * np.dot(X, (means * precisions).T) +
+                      np.dot(X ** 2, precisions.T))
+
+    elif covariance_type == 'spherical':
+        precisions = scale_mx ** 2
+        mx_product = (np.sum(means ** 2, 1) * precisions -
+                      2 * np.dot(X, means.T * precisions) +
+                      np.outer(row_norms(X, squared=True), precisions))
+
+    gams = gammaln(0.5 * (df + n_features)) - gammaln(0.5 * df)
+    return gams - 0.5 * (n_features * np.log(df * np.pi) +
+                         (df + n_features) * log1p(mx_product / df)) + log_det
 
 class GaussianClassifier(MixtureClassifierMixin, GaussianMixture):
     """Gaussian Mixture.
@@ -390,7 +473,33 @@ class GaussianClassifier(MixtureClassifierMixin, GaussianMixture):
         self._check_is_fitted()
         X = _check_X(X, n_features=self.means_.shape[1])
         n_integral_points = self.n_integral_points
-        hyper_params = self._get_parameters()
+        if n_integral_points > 0:
+            saved_params = self._get_parameters()
+            ret = self._sample_decision_function(X, saved_params, n_integral_points)
+        else:
+            if self.use_weights:
+                # ret = self._estimate_weighted_log_prob(X)
+                ret = self._estimate_log_bayesian_prob(X) + self._estimate_log_weights()
+            else:
+                ret = self._estimate_log_bayesian_prob(X)
+        return ret
+
+    def _sample_decision_function(self, X, hyper_params, n_integral_points):
+        """Predict the labels for the data samples in X using trained model.
+
+        Parameters
+        ----------
+        X : array-like, shape (n_samples, n_features)
+            List of n_features-dimensional data points. Each row
+            corresponds to a single data point.
+
+        Returns
+        -------
+        ret : array, shape (n_samples, n_classes)
+            Component likelihoods.
+        """
+        self._check_is_fitted()
+        X = _check_X(X, n_features=self.means_.shape[1])
         ret = np.array([[0]], dtype=float)
 
         from .simple_gaussian_mixture import GaussianClassifier as SGM
@@ -403,7 +512,6 @@ class GaussianClassifier(MixtureClassifierMixin, GaussianMixture):
             else:
                 ret = ret + sgm._estimate_log_prob(X)
         return ret / n_integral_points
-
 
     def _sample_base_params(self, hyper_params, n_integral_points):
         """Predict the labels for the data samples in X using trained model.
@@ -449,6 +557,9 @@ class GaussianClassifier(MixtureClassifierMixin, GaussianMixture):
         (self.classes_, self.counts_, *base_params) = params
         super(GaussianClassifier, self)._set_parameters(base_params)
 
+    def _estimate_log_bayesian_prob(self, X):
+        return _estimate_log_gaussian_prob(
+            X, self.counts_, self.means_, self.counts_, self.precisions_cholesky_, self.covariance_type)
 
 
 def exampleClassifier(n_components, n_features, covariance_type='full', random_state=None):
