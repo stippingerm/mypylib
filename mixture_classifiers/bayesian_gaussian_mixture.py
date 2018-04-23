@@ -230,46 +230,43 @@ def _estimate_log_gaussian_prob(X, count_mean, means, count_precis, precisions_c
     """
     n_samples, n_features = X.shape
     n_components, _ = means.shape
-    df = count_precis - n_features + 1.0
 
     if covariance_type == 'tied':
-        scale_pref = (np.sum(count_mean) + 1.0) * np.sum(count_precis) / (
-                (np.sum(count_precis) - n_features + 1.0) * np.sum(count_mean))
-        scale_mx = precisions_chol / np.sqrt(scale_pref)
-    else:
-        scale_pref = (count_mean + 1.0) * count_precis / ((count_precis - n_features + 1.0) * count_mean)
-        scale_mx = np.array([p/np.sqrt(s) for p,s in zip(precisions_chol,scale_pref)])
+        count_precis = np.sum(count_precis)
+
+    df = count_precis - n_features + 1.0
+    scale_pref = (count_mean + 1.0) * count_precis / (df * count_mean)
     # det(precision_chol) is half of det(precision)
     log_det = _compute_log_det_cholesky(
-        scale_mx, covariance_type, n_features)
+        precisions_chol, covariance_type, n_features) - 0.5 * n_components * np.log(scale_pref)
 
     if covariance_type == 'full':
         mx_product = np.empty((n_samples, n_components))
-        for k, (mu, prec_chol) in enumerate(zip(means, scale_mx)):
+        for k, (mu, prec_chol) in enumerate(zip(means, precisions_chol)):
             y = np.dot(X, prec_chol) - np.dot(mu, prec_chol)
             mx_product[:, k] = np.sum(np.square(y), axis=1)
 
     elif covariance_type == 'tied':
         mx_product = np.empty((n_samples, n_components))
         for k, mu in enumerate(means):
-            y = np.dot(X, scale_mx) - np.dot(mu, scale_mx)
+            y = np.dot(X, precisions_chol) - np.dot(mu, precisions_chol)
             mx_product[:, k] = np.sum(np.square(y), axis=1)
 
     elif covariance_type == 'diag':
-        precisions = scale_mx ** 2
+        precisions = precisions_chol ** 2
         mx_product = (np.sum((means ** 2 * precisions), 1) -
                       2. * np.dot(X, (means * precisions).T) +
                       np.dot(X ** 2, precisions.T))
 
     elif covariance_type == 'spherical':
-        precisions = scale_mx ** 2
+        precisions = precisions_chol ** 2
         mx_product = (np.sum(means ** 2, 1) * precisions -
                       2 * np.dot(X, means.T * precisions) +
                       np.outer(row_norms(X, squared=True), precisions))
 
     gams = gammaln(0.5 * (df + n_features)) - gammaln(0.5 * df)
     return gams - 0.5 * (n_features * np.log(df * np.pi) +
-                         (df + n_features) * log1p(mx_product / df)) + log_det
+                         (df + n_features) * log1p(mx_product / (scale_pref * df))) + log_det
 
 class GaussianClassifier(MixtureClassifierMixin, GaussianMixture):
     """Gaussian Mixture.
@@ -573,8 +570,12 @@ class GaussianClassifier(MixtureClassifierMixin, GaussianMixture):
             covariances_ = [np.diag(c*np.ones(d)) for c in self.covariances_]
         for i, (k, m, c) in enumerate(zip(self.counts_, self.means_, covariances_)):
             d = len(m)
-            df = k - d + 1
-            cov = (k+1)/(k*(k-d+1)) * k*c
+            if self.covariance_type == "tied":
+                n = np.sum(self.counts_)
+            else:
+                n = k
+            df = n - d + 1
+            cov = (k + 1) / (k * df) * n * c
             mvt = MVT.multivariate_t(df, m, cov)
             e2[:, i] = mvt.logpdf(X)
         pass
