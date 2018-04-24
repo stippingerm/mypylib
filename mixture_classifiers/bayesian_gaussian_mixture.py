@@ -32,18 +32,18 @@ def _no_progress_bar(x, *args, **kwargs):
 ###############################################################################
 # Gaussian mixture parameters sampling (used by the decision function)
 
-def _sample_gaussian_parameters_full(count_mean, hyper_mean, count_covar, hyper_covar, random_state):
+def _sample_gaussian_parameters_full(counts_means, hyper_means, counts_covars, hyper_covars, random_state):
     """Estimate the full covariance matrices.
 
     Parameters
     ----------
-    count_mean : array-like, shape (n_components,)
+    counts_means : array-like, shape (n_components,)
 
-    hyper_mean : array-like, shape (n_components, n_features)
+    hyper_means : array-like, shape (n_components, n_features)
 
-    count_covar : array-like, shape (n_components,)
+    counts_covars : array-like, shape (n_components,)
 
-    hyper_covar : array-like, shape (n_components, n_features, n_features)
+    hyper_covars : array-like, shape (n_components, n_features, n_features)
 
     random_state : int, RandomState
 
@@ -56,24 +56,27 @@ def _sample_gaussian_parameters_full(count_mean, hyper_mean, count_covar, hyper_
         The covariance matrix of the current components.
     """
     from scipy.stats import invwishart, wishart, multivariate_normal as mnorm
-    # precisions = [wishart.rvs(n, pre / n, random_state=random_state) for pre, n in zip(hyper_precis, count_precis)]
-    covariances = [invwishart.rvs(n, cov * n, random_state=random_state) for cov, n in zip(hyper_covar, count_covar)]
-    means = [mnorm.rvs(m, cov / n, random_state=random_state) for m, cov, n in zip(hyper_mean, covariances, count_mean)]
+    # precisions = [wishart.rvs(n, pre / n, random_state=random_state)
+    #               for pre, n in zip(hyper_precis, count_precis)]
+    covariances = [invwishart.rvs(n, cov * n, random_state=random_state)
+                   for cov, n in zip(hyper_covars, counts_covars)]
+    means = [mnorm.rvs(m, cov / n, random_state=random_state)
+             for m, cov, n in zip(hyper_means, covariances, counts_means)]
     return means, covariances
 
 
-def _sample_gaussian_parameters_tied(count_mean, hyper_mean, count_covar, hyper_covar, random_state):
+def _sample_gaussian_parameters_tied(counts_means, hyper_means, counts_covars, hyper_covars, random_state):
     """Estimate the full covariance matrices.
 
     Parameters
     ----------
-    count_mean : array-like, shape (n_components,)
+    counts_means : array-like, shape (n_components,)
 
-    hyper_mean : array-like, shape (n_components, n_features)
+    hyper_means : array-like, shape (n_components, n_features)
 
-    count_covar : array-like, shape (1,)
+    counts_covars : array-like, shape (1,)
 
-    hyper_covar : array-like, shape (n_features, n_features)
+    hyper_covars : array-like, shape (n_features, n_features)
 
     random_state : int, RandomState
 
@@ -86,24 +89,27 @@ def _sample_gaussian_parameters_tied(count_mean, hyper_mean, count_covar, hyper_
         The covariance matrix of the current components.
     """
     from scipy.stats import invwishart, wishart, multivariate_normal as mnorm
-    # precisions = wishart.rvs(np.sum(count_precis), hyper_precis / np.sum(count_precis), random_state=random_state)
-    covariances = invwishart.rvs(np.sum(count_covar), hyper_covar * np.sum(count_covar), random_state=random_state)
-    means = [mnorm.rvs(m, covariances / n, random_state=random_state) for m, n in zip(hyper_mean, count_mean)]
+    # precisions = wishart.rvs(np.sum(count_precis),
+    #                          hyper_precis / np.sum(count_precis), random_state=random_state)
+    covariances = invwishart.rvs(np.sum(counts_covars),
+                                 hyper_covars * np.sum(counts_covars), random_state=random_state)
+    means = [mnorm.rvs(m, covariances / n, random_state=random_state)
+             for m, n in zip(hyper_means, counts_means)]
     return means, covariances
 
 
-def _sample_gaussian_parameters_diag(count_mean, hyper_mean, count_covar, hyper_covar, random_state):
+def _sample_gaussian_parameters_diag(counts_means, hyper_means, counts_covars, hyper_covars, random_state):
     """Estimate the full covariance matrices.
 
     Parameters
     ----------
-    count_mean : array-like, shape (n_components,)
+    counts_means : array-like, shape (n_components,)
 
-    hyper_mean : array-like, shape (n_components, n_features)
+    hyper_means : array-like, shape (n_components, n_features)
 
-    count_covar : array-like, shape (1,)
+    counts_covars : array-like, shape (1,)
 
-    hyper_covar : array-like, shape (n_components, n_features)
+    hyper_covars : array-like, shape (n_components, n_features)
 
     random_state : int, RandomState
 
@@ -119,23 +125,24 @@ def _sample_gaussian_parameters_diag(count_mean, hyper_mean, count_covar, hyper_
     # precisions = [np.diag(wishart.rvs(n, np.diag(pre * n), random_state=random_state))
     #               for pre, n in zip(hyper_precis, count_precis)]
     covariances = [np.diag(invwishart.rvs(n, np.diag(cov * n), random_state=random_state))
-                   for cov, n in zip(hyper_covar, count_covar)]
-    means = [norm.rvs(m, cov / n, random_state=random_state) for m, cov, n in zip(hyper_mean, covariances, count_mean)]
+                   for cov, n in zip(hyper_covars, counts_covars)]
+    means = [norm.rvs(m, cov / n, random_state=random_state)
+             for m, cov, n in zip(hyper_means, covariances, counts_means)]
     return means, covariances
 
 
-def _sample_gaussian_parameters_spherical(count_mean, hyper_mean, count_covar, hyper_covar, random_state):
+def _sample_gaussian_parameters_spherical(counts_means, hyper_means, counts_covars, hyper_covars, random_state):
     """Estimate the full covariance matrices.
 
     Parameters
     ----------
-    count_mean : array-like, shape (n_components,)
+    counts_means : array-like, shape (n_components,)
 
-    hyper_mean : array-like, shape (n_components, n_features)
+    hyper_means : array-like, shape (n_components, n_features)
 
-    count_covar : array-like, shape (1,)
+    counts_covars : array-like, shape (1,)
 
-    hyper_covar : array-like, shape (n_components,)
+    hyper_covars : array-like, shape (n_components,)
 
     random_state : int, RandomState
 
@@ -148,29 +155,32 @@ def _sample_gaussian_parameters_spherical(count_mean, hyper_mean, count_covar, h
         The covariance matrix of the current components.
     """
     from scipy.stats import invwishart, wishart, norm
-    # precisions = [wishart.rvs(n, pre / n, random_state=random_state) for pre, n in zip(hyper_precis, count_precis)]
-    covariances = [invwishart.rvs(n, cov * n, random_state=random_state) for cov, n in zip(hyper_covar, count_covar)]
-    means = [norm.rvs(m, cov / n, random_state=random_state) for m, cov, n in zip(hyper_mean, covariances, count_mean)]
+    # precisions = [wishart.rvs(n, pre / n, random_state=random_state)
+    #               for pre, n in zip(hyper_precis, count_precis)]
+    covariances = [invwishart.rvs(n, cov * n, random_state=random_state)
+                   for cov, n in zip(hyper_covars, counts_covars)]
+    means = [norm.rvs(m, cov / n, random_state=random_state)
+             for m, cov, n in zip(hyper_means, covariances, counts_means)]
     return means, covariances
 
 
-def _sample_gaussian_parameters(count_mean, hyper_mean, count_covar, hyper_covar, covariance_type, random_state):
+def _sample_gaussian_parameters(counts_means, hyper_means, counts_covars, hyper_covars, covariance_type, random_state):
     """Estimate the Gaussian distribution parameters.
 
     Parameters
     ----------
-    count_mean : array-like, shape (n_components,)
+    counts_means : array-like, shape (n_components,)
         The number of observations used to establish the hyperparameter mean.
 
-    hyper_mean : array-like, shape (n_components, n_features)
+    hyper_means : array-like, shape (n_components, n_features)
         The hyperparameter mean.
 
-    count_covar : array-like
+    counts_covars : array-like
         The number of observations used to establish the hyperparameter covariances.
 
-    hyper_covar : array-like
+    hyper_covars : array-like
         The hyperparameter covariances. The hyperparameter in the Normal-(inverse-)Wishart
-        is the sum of pairwise deviations, i.e., {count_covar[i] * hyper_covar[i] for all i}
+        is the sum of pairwise deviations, i.e., {counts_covars[i] * hyper_covars[i] for all i}
 
     covariance_type : {'full', 'tied', 'diag', 'spherical'}
         The type of precision matrices.
@@ -188,18 +198,18 @@ def _sample_gaussian_parameters(count_mean, hyper_mean, count_covar, hyper_covar
                           "tied": _sample_gaussian_parameters_tied,
                           "diag": _sample_gaussian_parameters_diag,
                           "spherical": _sample_gaussian_parameters_spherical
-                          }[covariance_type](count_mean, hyper_mean, count_covar, hyper_covar, random_state)
+                          }[covariance_type](counts_means, hyper_means, counts_covars, hyper_covars, random_state)
     return np.array(means), np.array(covariances)
 
 
-def _estimate_log_gaussian_prob(X, count_mean, means, count_precis, precisions_chol, covariance_type):
+def _estimate_log_gaussian_prob(X, counts_means, means, count_precis, precisions_chol, covariance_type):
     """Estimate the full Bayesian log Gaussian probability.
 
     Parameters
     ----------
     X : array-like, shape (n_samples, n_features)
 
-    count_mean : array-like, shape (n_components,)
+    counts_means : array-like, shape (n_components,)
 
     means : array-like, shape (n_components, n_features)
 
@@ -222,9 +232,9 @@ def _estimate_log_gaussian_prob(X, count_mean, means, count_precis, precisions_c
     -----
     This is the posterior predictive of the Normal-(inverse-)Wishart distribution.
     It is a multivariate Student's t distribution with
-    * df = count_covar - rank + 1
+    * df = counts_covars - rank + 1
     * mean = mean
-    * scale = [ (count_mean + 1) / ( count_mean * (count_covar-rank+1) ) ] * ( count_covar * covar )
+    * scale = [ (counts_means + 1) / ( counts_means * (counts_covars-rank+1) ) ] * ( counts_covars * covar )
       where the last term is the sum pairwise deviation products which is the parameter of
       the Normal-(inverse-)Wishart distribution instead of the covariance)
     """
@@ -235,7 +245,7 @@ def _estimate_log_gaussian_prob(X, count_mean, means, count_precis, precisions_c
         count_precis = np.sum(count_precis)
 
     df = count_precis - n_features + 1.0
-    scale_pref = (count_mean + 1.0) * count_precis / (df * count_mean)
+    scale_pref = (counts_means + 1.0) * count_precis / (df * counts_means)
     # det(precision_chol) is half of det(precision)
     log_det = _compute_log_det_cholesky(
         precisions_chol, covariance_type, n_features) - 0.5 * n_components * np.log(scale_pref)
@@ -267,6 +277,7 @@ def _estimate_log_gaussian_prob(X, count_mean, means, count_precis, precisions_c
     gams = gammaln(0.5 * (df + n_features)) - gammaln(0.5 * df)
     return gams - 0.5 * (n_features * np.log(df * np.pi) +
                          (df + n_features) * log1p(mx_product / (scale_pref * df))) + log_det
+
 
 class GaussianClassifier(MixtureClassifierMixin, GaussianMixture):
     """Gaussian Mixture.
@@ -435,7 +446,7 @@ class GaussianClassifier(MixtureClassifierMixin, GaussianMixture):
 
     def __init__(self, n_components=1, covariance_type='full', tol=1e-3,
                  reg_covar=1e-6, max_iter=100, n_init=1, init_params='kmeans', n_integral_points=100,
-                 classes_init=None, counts_init=None,
+                 classes_init=None, counts_means_init=None, counts_covar_init=None,
                  weights_init=None, use_weights=True, means_init=None, precisions_init=None,
                  random_state=None, warm_start=False,
                  progress_bar=None, verbose=0, verbose_interval=10):
@@ -449,7 +460,8 @@ class GaussianClassifier(MixtureClassifierMixin, GaussianMixture):
         self.n_integral_points = n_integral_points
         self.use_weights = use_weights
         self.classes_init = classes_init
-        self.counts_init = counts_init
+        self.counts_means_init = counts_means_init
+        self.counts_covar_init = counts_covar_init
         self.progress_bar = _no_progress_bar if progress_bar is None else progress_bar
 
     def decision_function(self, X):
@@ -523,18 +535,19 @@ class GaussianClassifier(MixtureClassifierMixin, GaussianMixture):
         labels : array, shape (n_samples,)
             Component labels.
         """
-        (classes_, counts_, weights_, means_, covariances_,
+        (classes_, counts_means_, counts_covar_, weights_, means_, covariances_,
          precisions_cholesky_) = hyper_params
 
         for i in range(n_integral_points):
             means, covariances = _sample_gaussian_parameters(
-                counts_, means_, counts_, covariances_, self.covariance_type, self.random_state)
+                counts_means_, means_, counts_covar_, covariances_, self.covariance_type, self.random_state)
             precisions_cholesky = _compute_precision_cholesky(
                 covariances, self.covariance_type)
             yield classes_, weights_, means, covariances, precisions_cholesky
 
     def fit(self, X, y):
-        classes_, self.counts_ = np.unique(y, return_counts=True)
+        classes_, self.counts_means_ = np.unique(y, return_counts=True)
+        self.counts_covar_ = self.counts_means_
 
         # Delegate most of parameter checks
         super(GaussianClassifier, self).fit(X, y)
@@ -546,32 +559,32 @@ class GaussianClassifier(MixtureClassifierMixin, GaussianMixture):
     #    return MixtureClassifierMixin.predict(self, X)
 
     def _get_parameters(self):
-        return (self.classes_, self.counts_, self.weights_, self.means_, self.covariances_,
+        return (self.classes_, self.counts_means_, self.counts_covar_, self.weights_, self.means_, self.covariances_,
                 self.precisions_cholesky_)
 
     def _set_parameters(self, params):
-        (self.classes_, self.counts_, *base_params) = params
+        (self.classes_, self.counts_means_, self.counts_covar_, *base_params) = params
         super(GaussianClassifier, self)._set_parameters(base_params)
 
     def _check_log_prob(self, X):
         # for debug purposes only
         from multivariate_distns import multivariate_t as MVT
         e1 = _estimate_log_gaussian_prob(
-            X, self.counts_, self.means_, self.counts_, self.precisions_cholesky_, self.covariance_type)
+            X, self.counts_means_, self.means_, self.counts_covar_, self.precisions_cholesky_, self.covariance_type)
         e2 = np.empty_like(e1)
         d = len(self.means_[0])
         if self.covariance_type == "full":
             covariances_ = self.covariances_
         if self.covariance_type == "tied":
-            covariances_ = [self.covariances_ for k in self.counts_]
+            covariances_ = [self.covariances_ for k in self.counts_means_]
         if self.covariance_type == "diag":
             covariances_ = [np.diag(c) for c in self.covariances_]
         if self.covariance_type == "spherical":
-            covariances_ = [np.diag(c*np.ones(d)) for c in self.covariances_]
-        for i, (k, m, c) in enumerate(zip(self.counts_, self.means_, covariances_)):
+            covariances_ = [np.diag(c * np.ones(d)) for c in self.covariances_]
+        for i, (k, m, c) in enumerate(zip(self.counts_means_, self.means_, covariances_)):
             d = len(m)
             if self.covariance_type == "tied":
-                n = np.sum(self.counts_)
+                n = np.sum(self.counts_covar_)
             else:
                 n = k
             df = n - d + 1
@@ -581,9 +594,10 @@ class GaussianClassifier(MixtureClassifierMixin, GaussianMixture):
         pass
 
     def _estimate_log_bayesian_prob(self, X):
-        #self._check_log_prob(X)
+        # self._check_log_prob(X)
         return _estimate_log_gaussian_prob(
-            X, self.counts_, self.means_, self.counts_, self.precisions_cholesky_, self.covariance_type)
+            X, self.counts_means_, self.means_, self.counts_covar_, self.precisions_cholesky_, self.covariance_type)
+
 
 
 def exampleClassifier(n_components, n_features, covariance_type='full', random_state=None):
