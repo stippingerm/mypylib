@@ -1,3 +1,8 @@
+#
+# Author: Marcell Stippinger
+# License: BSD 3 clause
+#
+
 import numpy as np
 import pandas as pd
 from itertools import product as iter_product
@@ -5,6 +10,7 @@ from itertools import product as iter_product
 
 def _no_progress_bar(x, *args, **kwargs):
     return x
+
 
 def _fill_index_names(idx, single_default='index'):
     """Return names of index levels and substitute None values for default names.
@@ -21,7 +27,7 @@ def _fill_index_names(idx, single_default='index'):
     """
     data_type = type(idx)
     if issubclass(data_type, pd.MultiIndex):
-        result = [('level_%d'%i if s is None else s) for i, s in enumerate(idx.names)]
+        result = [('level_%d' % i if s is None else s) for i, s in enumerate(idx.names)]
     else:
         result = [single_default] if idx.name is None else idx.names
     return result
@@ -98,7 +104,7 @@ def to_frame(data):
     elif issubclass(data_type, pd.DataFrame):
         return data
     else:
-        raise NotImplementedError('Operation not implemented for type "%s"'%data_type)
+        raise NotImplementedError('Operation not implemented for type "%s"' % data_type)
 
 
 def fill_axis_names(data, inplace=False):
@@ -217,43 +223,61 @@ def outer_single(data, levels=-1, fill_value=None, fun=None, **kwargs):
         otherwise return the two DataFrame objects that would be passed to `fun`
     """
     data = fill_axis_names(data)
-    return outer(fun, data, data.unstack(levels), **kwargs)    return outer(fun, data, data.unstack(levels), **kwargs)
+    return outer(data, data.unstack(levels, fill_value=fill_value), fun=fun, **kwargs)
 
 
-def wide_groupby(df, fun, columns=None, n_jobs=1, fun_args=tuple(), progress_bar=None, **kwargs):
+def wide_groupby(fun, df, columns=None, fun_args=tuple(),
+                 n_jobs=1, verbose=0, pre_dispatch='2 * n_jobs',
+                 progress_bar=None, **kwargs):
     """Group DataFrame data based on `columns` if provided else by unique index values and feed chunks to function.
     In contrast to DataFrame.groupby aggregation which works on Series, here the chunks are DataFrames with all columns.
     df: DataFrame
     fun: function
+        Operation to be performed on the chunks
+        Note: if using parallelism (n_jobs!=0) this function must be defined
+        in a module, notebook cell definitions do not work.
     columns: list of str
         coluns to be used for grouping
-    n_jobs: int
-        CPU cores to use
     fun_args: tuple
         positional function arguments after data chunk
+    n_jobs: int, default: 1
+        The maximum number of concurrently running jobs, such as the number
+        of Python worker processes when backend="multiprocessing"
+        or the size of the thread-pool when backend="threading".
+        If -1 all CPUs are used. If 1 is given, no parallel computing code
+        is used at all, which is useful for debugging. For n_jobs below -1,
+        (n_cpus + 1 + n_jobs) are used. Thus for n_jobs = -2, all
+        CPUs but one are used.
+    verbose: int, optional
+        The verbosity level: if non zero, progress messages are
+        printed. Above 50, the output is sent to stdout.
+        The frequency of the messages increases with the verbosity level.
+        If it more than 10, all iterations are reported.
+    pre_dispatch: {'all', integer, or expression, as in '3*n_jobs'}
+        The number of batches (of tasks) to be pre-dispatched.
+        Default is '2*n_jobs'. When batch_size="auto" this is reasonable
+        default and the multiprocessing workers should never starve.
+    progress_bar: tqdm, optional
+        A progress bar that measures the consumption of an iterable.
     **kwargs: dict
         keyword arguments to be passed to function
     """
+    from sklearn.externals.joblib import Parallel, delayed
     if progress_bar is None:
         progress_bar = _no_progress_bar
     if columns is not None:
         df = df.reset_index().set_index(columns)
     record_idx = df.index.unique()
-    if n_jobs <= 1:
-        ret = { idx: fun(df.loc[idx,:], *fun_args, **kwargs) for idx in progress_bar(record_idx) }
+    parallel = Parallel(n_jobs=n_jobs, verbose=verbose, pre_dispatch=pre_dispatch)
+    values = parallel(delayed(fun)(df.loc[[idx], :], *fun_args, **kwargs) for idx in progress_bar(record_idx))
+    if issubclass(type(record_idx), pd.Index):
+        # This is a workaround of index.unique not keeping names
+        record_idx.names = df.index.names
     else:
-        # NOTE: on windows fork is mimiced, python tries to import the module, won't work for notebook cells
-        # winprocess is a helper library that captures notebook-code and allows access to it through a module
-        # limitation: function must be a global def-ed function (not lambda)
-        from concurrent.futures import ProcessPoolExecutor, as_completed
-        with ProcessPoolExecutor(max_workers=n_jobs) as pool:
-            futures = [ pool.submit(fun, df.loc[idx, :], *fun_args, **kwargs) for idx in record_idx ]
-            for f in progress_bar(as_completed(futures), total=len(futures)):
-                pass
-            ret = { idx: f.result() for idx, f in zip(record_idx, futures) }
+        # Index.unique may not return an index
+        record_idx = pd.MultiIndex.from_tuples(record_idx, names=df.index.names)
     try:
-        ret_df = pd.DataFrame(data=list(ret.values()),
-                              index=pd.MultiIndex.from_tuples(ret.keys(), names=df.index.names))
+        ret_df = pd.DataFrame(data=values, index=record_idx)
     except:
-        ret_df = pd.DataFrame.from_dict(ret, orient='index')
+        ret_df = pd.DataFrame.from_dict({idx: val for idx, val in zip(record_idx, values)}, orient='index')
     return ret_df
