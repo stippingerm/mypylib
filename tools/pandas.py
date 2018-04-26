@@ -217,4 +217,43 @@ def outer_single(data, levels=-1, fill_value=None, fun=None, **kwargs):
         otherwise return the two DataFrame objects that would be passed to `fun`
     """
     data = fill_axis_names(data)
-    return outer(fun, data, data.unstack(levels), **kwargs)
+    return outer(fun, data, data.unstack(levels), **kwargs)    return outer(fun, data, data.unstack(levels), **kwargs)
+
+
+def wide_groupby(df, fun, columns=None, n_jobs=1, fun_args=tuple(), progress_bar=None, **kwargs):
+    """Group DataFrame data based on `columns` if provided else by unique index values and feed chunks to function.
+    In contrast to DataFrame.groupby aggregation which works on Series, here the chunks are DataFrames with all columns.
+    df: DataFrame
+    fun: function
+    columns: list of str
+        coluns to be used for grouping
+    n_jobs: int
+        CPU cores to use
+    fun_args: tuple
+        positional function arguments after data chunk
+    **kwargs: dict
+        keyword arguments to be passed to function
+    """
+    if progress_bar is None:
+        progress_bar = _no_progress_bar
+    if columns is not None:
+        df = df.reset_index().set_index(columns)
+    record_idx = df.index.unique()
+    if n_jobs <= 1:
+        ret = { idx: fun(df.loc[idx,:], *fun_args, **kwargs) for idx in progress_bar(record_idx) }
+    else:
+        # NOTE: on windows fork is mimiced, python tries to import the module, won't work for notebook cells
+        # winprocess is a helper library that captures notebook-code and allows access to it through a module
+        # limitation: function must be a global def-ed function (not lambda)
+        from concurrent.futures import ProcessPoolExecutor, as_completed
+        with ProcessPoolExecutor(max_workers=n_jobs) as pool:
+            futures = [ pool.submit(fun, df.loc[idx, :], *fun_args, **kwargs) for idx in record_idx ]
+            for f in progress_bar(as_completed(futures), total=len(futures)):
+                pass
+            ret = { idx: f.result() for idx, f in zip(record_idx, futures) }
+    try:
+        ret_df = pd.DataFrame(data=list(ret.values()),
+                              index=pd.MultiIndex.from_tuples(ret.keys(), names=df.index.names))
+    except:
+        ret_df = pd.DataFrame.from_dict(ret, orient='index')
+    return ret_df
