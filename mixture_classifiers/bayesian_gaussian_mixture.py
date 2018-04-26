@@ -13,7 +13,7 @@ import numpy as np
 from scipy.special import gammaln, log1p
 # sklearn.mixture.gaussian_mixture
 from sklearn.mixture.gaussian_mixture import GaussianMixture, _compute_precision_cholesky, _compute_log_det_cholesky
-from .simple_gaussian_mixture import _fullCorr, _tiedCorr, _diagCorr, _sphericalCorr
+from .simple_gaussian_mixture import _fullCorr, _tiedCorr, _diagCorr, _sphericalCorr, _estimate_gaussian_parameters
 
 from sklearn.utils import check_array
 from sklearn.utils.validation import check_is_fitted
@@ -598,6 +598,52 @@ class GaussianClassifier(MixtureClassifierMixin, GaussianMixture):
         return _estimate_log_gaussian_prob(
             X, self.counts_means_, self.means_, self.counts_covar_, self.precisions_cholesky_, self.covariance_type)
 
+
+class FairTiedClassifier(GaussianClassifier):
+    def __init__(self, n_components=1, covariance_type='full', tol=1e-3,
+                 reg_covar=1e-6, max_iter=100, n_init=1, init_params='kmeans', n_integral_points=100,
+                 classes_init=None, weights_init=None, use_weights=True, means_init=None, precisions_init=None,
+                 random_state=None, warm_start=False,
+                 progress_bar=None, verbose=0, verbose_interval=10):
+        GaussianClassifier.__init__(self,
+                                    n_components=n_components, covariance_type=covariance_type, tol=tol,
+                                    reg_covar=reg_covar, max_iter=max_iter, n_init=n_init, init_params=init_params,
+                                    n_integral_points=n_integral_points,
+                                    classes_init=classes_init, weights_init=weights_init, use_weights=use_weights,
+                                    means_init=means_init, precisions_init=precisions_init,
+                                    random_state=random_state, warm_start=warm_start, verbose=verbose,
+                                    progress_bar=progress_bar, verbose_interval=verbose_interval)
+        if covariance_type != 'tied':
+            raise ValueError('Fair covariance estimation is needed only in the tied case.')
+
+    def fit(self, X, y):
+        classes_, self.counts_means_ = np.unique(y, return_counts=True)
+        self.counts_covar_ = self.counts_means_ / len(classes_)
+
+        # Delegate most of parameter checks
+        super(GaussianClassifier, self).fit(X, y)
+
+        if not np.all(self.classes_ == classes_):
+            raise ValueError('Implementation inconsistent, classes returned in different order')
+
+    def _m_step(self, X, log_resp):
+        """M step.
+
+        Parameters
+        ----------
+        X : array-like, shape (n_samples, n_features)
+
+        log_resp : array-like, shape (n_samples, n_components)
+            Logarithm of the posterior probabilities (or responsibilities) of
+            the point of each sample in X.
+        """
+        n_samples, _ = X.shape
+        self.weights_, self.means_, self.covariances_ = (
+            _estimate_gaussian_parameters(X, np.exp(log_resp), self.reg_covar,
+                                          self.covariance_type, self.random_state))
+        self.weights_ /= n_samples
+        self.precisions_cholesky_ = _compute_precision_cholesky(
+            self.covariances_, self.covariance_type)
 
 
 def exampleClassifier(n_components, n_features, covariance_type='full', random_state=None):

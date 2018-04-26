@@ -11,7 +11,8 @@
 import numpy as np
 
 # sklearn.mixture.gaussian_mixture
-from sklearn.mixture.gaussian_mixture import GaussianMixture
+from sklearn.mixture.gaussian_mixture import GaussianMixture, _estimate_gaussian_covariances_tied, \
+    _compute_precision_cholesky
 from sklearn.utils import check_array
 from sklearn.utils.validation import check_is_fitted
 # sklearn.mixture.base
@@ -48,8 +49,8 @@ def vineCorr(P):
     d = P.shape[0]
     S = np.eye(d)
 
-    for k in range(0, d-1):
-        for i in range(k+1, d):
+    for k in range(0, d - 1):
+        for i in range(k + 1, d):
             p = P[k, i]
             for l in range((k - 1), -1, -1):  # converting partial correlation to raw correlation
                 p *= np.sqrt((1 - P[l, i] ^ 2) * (1 - P[l, k] ^ 2)) + P[l, i] * P[l, k]
@@ -60,6 +61,54 @@ def vineCorr(P):
     permutation = np.random.permutation(d)
     S = S[permutation, :][:, permutation]
     return S
+
+
+def _estimate_gaussian_parameters(X, resp, reg_covar, covariance_type, random_state):
+    """Estimate the Gaussian distribution parameters.
+
+    Parameters
+    ----------
+    X : array-like, shape (n_samples, n_features)
+        The input data array.
+
+    resp : array-like, shape (n_samples, n_components)
+        The responsibilities for each data sample in X.
+
+    reg_covar : float
+        The regularization added to the diagonal of the covariance matrices.
+
+    covariance_type : {'full', 'tied', 'diag', 'spherical'}
+        The type of precision matrices.
+
+    random_state : RandomState instance
+        the random number generator;
+
+    Returns
+    -------
+    nk : array-like, shape (n_components,)
+        The numbers of data samples in the current components.
+
+    means : array-like, shape (n_components, n_features)
+        The centers of the current components.
+
+    covariances : array-like
+        The covariance matrix of the current components.
+        The shape depends of the covariance_type.
+    """
+    nk = resp.sum(axis=0) + 10 * np.finfo(resp.dtype).eps
+    means = np.dot(resp.T, X) / nk[:, np.newaxis]
+    # Subsample data to be comparable with "full" that has fewer data per component
+    n_samples, n_components = resp.shape
+    select = random_state.choice(n_samples, int(n_samples / n_components), replace=False)
+    X_fair = X[select, :]
+    resp_fair = resp[select, :]
+    nk_fair = resp_fair.sum(axis=0) + 10 * np.finfo(resp.dtype).eps
+    # NOTE: it would be appealing to use the more precise means here too
+    # but it may result in an invalid covariance matrix
+    means_fair = np.dot(resp_fair.T, X_fair) / nk_fair[:, np.newaxis]
+    covariances = {"tied": _estimate_gaussian_covariances_tied,
+                   }[covariance_type](resp_fair, X_fair, nk_fair, means_fair, reg_covar)
+    return nk, means, covariances
 
 
 class GaussianClassifier(MixtureClassifierMixin, GaussianMixture):
@@ -279,6 +328,41 @@ class GaussianClassifier(MixtureClassifierMixin, GaussianMixture):
         super(GaussianClassifier, self)._set_parameters(base_params)
 
 
+class FairTiedClassifier(GaussianClassifier):
+    def __init__(self, n_components=1, covariance_type='full', tol=1e-3,
+                 reg_covar=1e-6, max_iter=100, n_init=1, init_params='kmeans',
+                 classes_init=None, weights_init=None, use_weights=True, means_init=None, precisions_init=None,
+                 random_state=None, warm_start=False,
+                 verbose=0, verbose_interval=10):
+        GaussianClassifier.__init__(self,
+                                    n_components=n_components, covariance_type=covariance_type, tol=tol,
+                                    reg_covar=reg_covar, max_iter=max_iter, n_init=n_init, init_params=init_params,
+                                    classes_init=classes_init, weights_init=weights_init, use_weights=use_weights,
+                                    means_init=means_init, precisions_init=precisions_init,
+                                    random_state=random_state, warm_start=warm_start, verbose=verbose,
+                                    verbose_interval=verbose_interval)
+        if covariance_type != 'tied':
+            raise ValueError('Fair covariance estimation is needed only in the tied case.')
+
+    def _m_step(self, X, log_resp):
+        """M step.
+
+        Parameters
+        ----------
+        X : array-like, shape (n_samples, n_features)
+
+        log_resp : array-like, shape (n_samples, n_components)
+            Logarithm of the posterior probabilities (or responsibilities) of
+            the point of each sample in X.
+        """
+        n_samples, _ = X.shape
+        self.weights_, self.means_, self.covariances_ = (
+            _estimate_gaussian_parameters(X, np.exp(log_resp), self.reg_covar,
+                                          self.covariance_type, self.random_state))
+        self.weights_ /= n_samples
+        self.precisions_cholesky_ = _compute_precision_cholesky(
+            self.covariances_, self.covariance_type)
+
 
 def _exampleNormal(n_features, beta_param=1, random_state=None):
     from scipy.stats import beta, expon
@@ -320,7 +404,7 @@ def _sphericalCorr(n_components, n_features, expon_param=1, random_state=None):
 def exampleClassifier(n_components, n_features, covariance_type='full', random_state=None):
     from scipy.stats import norm
     weights = np.full((n_components,), 1.0 / n_components)
-    means = norm.rvs(0, 1, size=(n_components,n_features), random_state=random_state)
+    means = norm.rvs(0, 1, size=(n_components, n_features), random_state=random_state)
     covariances, precisions = {'full': _fullCorr, 'tied': _tiedCorr, 'diag': _diagCorr,
                                'spherical': _sphericalCorr}[covariance_type](n_components, n_features,
                                                                              random_state=random_state)
