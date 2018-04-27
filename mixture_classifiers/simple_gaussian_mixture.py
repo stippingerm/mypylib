@@ -63,7 +63,7 @@ def vineCorr(P):
     return S
 
 
-def _estimate_gaussian_parameters(X, resp, reg_covar, covariance_type, random_state):
+def _estimate_fair_gaussian_parameters(X, resp, reg_covar, covariance_type, random_state):
     """Estimate the Gaussian distribution parameters.
 
     Parameters
@@ -108,7 +108,7 @@ def _estimate_gaussian_parameters(X, resp, reg_covar, covariance_type, random_st
     means_fair = np.dot(resp_fair.T, X_fair) / nk_fair[:, np.newaxis]
     covariances = {"tied": _estimate_gaussian_covariances_tied,
                    }[covariance_type](resp_fair, X_fair, nk_fair, means_fair, reg_covar)
-    return nk, means, covariances
+    return nk, nk_fair, means, covariances
 
 
 class GaussianClassifier(MixtureClassifierMixin, GaussianMixture):
@@ -279,9 +279,9 @@ class GaussianClassifier(MixtureClassifierMixin, GaussianMixture):
     # TODO: when sampling assign learned class instead of ordinals
     # (this can be done by an overload that hooks to the super class)
 
-    def __init__(self, n_components=1, covariance_type='full', tol=1e-3,
-                 reg_covar=1e-6, max_iter=100, n_init=1, init_params='kmeans',
-                 classes_init=None, weights_init=None, use_weights=True, means_init=None, precisions_init=None,
+    def __init__(self, n_components_per_class=1, covariance_type='full', tol=1e-3,
+                 reg_covar=1e-6, max_iter=100, n_init=1, init_params='kmeans', use_weights=True,
+                 classes_init=None, weights_init=None, means_init=None, precisions_init=None,
                  random_state=None, warm_start=False,
                  verbose=0, verbose_interval=10):
         GaussianMixture.__init__(self,
@@ -316,16 +316,44 @@ class GaussianClassifier(MixtureClassifierMixin, GaussianMixture):
             ret = self._estimate_log_prob(X)
         return ret
 
-    # def predict(self, X):
-    #    return MixtureClassifierMixin.predict(self, X)
+    def sample(self, n_samples=1):
+        """Generate random samples from the fitted Gaussian distribution.
+
+        Parameters
+        ----------
+        n_samples : int, optional
+            Number of samples to generate. Defaults to 1.
+
+        Returns
+        -------
+        X : array, shape (n_samples, n_features)
+            Randomly generated sample
+
+        y : array, shape (nsamples,)
+            Component labels
+
+        """
+        X, y = super(GaussianClassifier, self).sample(n_samples)
+        return self._relabel_samples(X, y)
 
     def _get_parameters(self):
-        return (self.classes_, self.weights_, self.means_, self.covariances_,
-                self.precisions_cholesky_)
+        base_params = super(GaussianClassifier, self)._get_parameters()
+        return (self.classes_, *base_params)
 
     def _set_parameters(self, params):
+        """
+        Parameters
+        ----------
+        classes_
+        weight_concentration_
+        means_,
+        covariances_,
+        precisions_cholesky_
+        """
         (self.classes_, *base_params) = params
+        self.classes_ = np.array(self.classes_)
         super(GaussianClassifier, self)._set_parameters(base_params)
+        self.n_components = len(self.means_)
 
 
 class FairTiedClassifier(GaussianClassifier):
@@ -356,9 +384,9 @@ class FairTiedClassifier(GaussianClassifier):
             the point of each sample in X.
         """
         n_samples, _ = X.shape
-        self.weights_, self.means_, self.covariances_ = (
-            _estimate_gaussian_parameters(X, np.exp(log_resp), self.reg_covar,
-                                          self.covariance_type, self.random_state))
+        self.weights_, _, self.means_, self.covariances_ = (
+            _estimate_fair_gaussian_parameters(X, np.exp(log_resp), self.reg_covar,
+                                               self.covariance_type, self.random_state))
         self.weights_ /= n_samples
         self.precisions_cholesky_ = _compute_precision_cholesky(
             self.covariances_, self.covariance_type)
@@ -408,7 +436,7 @@ def exampleClassifier(n_components, n_features, covariance_type='full', random_s
     covariances, precisions = {'full': _fullCorr, 'tied': _tiedCorr, 'diag': _diagCorr,
                                'spherical': _sphericalCorr}[covariance_type](n_components, n_features,
                                                                              random_state=random_state)
-    classes = list(range(n_components))
+    classes = np.arange(n_components)
     clf = GaussianClassifier(n_components=n_components, covariance_type=covariance_type, random_state=random_state)
     clf._set_parameters((classes, weights, means, covariances, precisions))
     return clf

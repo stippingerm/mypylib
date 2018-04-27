@@ -16,7 +16,7 @@ from sklearn.utils.fixes import logsumexp
 from sklearn.utils import check_random_state
 from sklearn.mixture.gaussian_mixture import GaussianMixture, _compute_precision_cholesky, _compute_log_det_cholesky
 from sklearn.mixture.bayesian_mixture import BayesianGaussianMixture as _BaseBayesianGaussianMixture
-from .simple_gaussian_mixture import _fullCorr, _tiedCorr, _diagCorr, _sphericalCorr, _estimate_gaussian_parameters
+from .simple_gaussian_mixture import _fullCorr, _tiedCorr, _diagCorr, _sphericalCorr, _estimate_fair_gaussian_parameters
 
 from sklearn.utils import check_array
 from sklearn.utils.validation import check_is_fitted
@@ -84,12 +84,12 @@ def _sample_gaussian_parameters_full(counts_means, hyper_means, counts_covars, h
         The covariance matrix of the current components.
     """
     from scipy.stats import invwishart, wishart, multivariate_normal as mnorm
-    # precisions = [wishart.rvs(n, pre / n, random_state=random_state)
-    #               for pre, n in zip(hyper_precis, count_precis)]
-    covariances = [invwishart.rvs(n, cov * n, random_state=random_state)
-                   for cov, n in zip(hyper_covars, counts_covars)]
-    means = [mnorm.rvs(m, cov / n, random_state=random_state)
-             for m, cov, n in zip(hyper_means, covariances, counts_means)]
+    # precisions = [wishart.rvs(n, pre / nu, random_state=random_state)
+    #               for pre, nu in zip(hyper_precis, count_precis)]
+    covariances = [invwishart.rvs(nu, cov * nu, random_state=random_state)
+                   for cov, nu in zip(hyper_covars, counts_covars)]
+    means = [mnorm.rvs(m, cov / k, random_state=random_state)
+             for m, cov, k in zip(hyper_means, covariances, counts_means)]
     return means, covariances
 
 
@@ -121,8 +121,8 @@ def _sample_gaussian_parameters_tied(counts_means, hyper_means, counts_covars, h
     #                          hyper_precis / np.sum(count_precis), random_state=random_state)
     covariances = invwishart.rvs(np.sum(counts_covars),
                                  hyper_covars * np.sum(counts_covars), random_state=random_state)
-    means = [mnorm.rvs(m, covariances / n, random_state=random_state)
-             for m, n in zip(hyper_means, counts_means)]
+    means = [mnorm.rvs(m, covariances / k, random_state=random_state)
+             for m, k in zip(hyper_means, counts_means)]
     return means, covariances
 
 
@@ -150,12 +150,12 @@ def _sample_gaussian_parameters_diag(counts_means, hyper_means, counts_covars, h
         The covariance matrix of the current components.
     """
     from scipy.stats import invwishart, wishart, norm
-    # precisions = [np.diag(wishart.rvs(n, np.diag(pre * n), random_state=random_state))
-    #               for pre, n in zip(hyper_precis, count_precis)]
-    covariances = [np.diag(invwishart.rvs(n, np.diag(cov * n), random_state=random_state))
-                   for cov, n in zip(hyper_covars, counts_covars)]
-    means = [norm.rvs(m, cov / n, random_state=random_state)
-             for m, cov, n in zip(hyper_means, covariances, counts_means)]
+    # precisions = [np.diag(wishart.rvs(nu, np.diag(pre * nu), random_state=random_state))
+    #               for pre, nu in zip(hyper_precis, count_precis)]
+    covariances = [np.diag(invwishart.rvs(nu, np.diag(cov * nu), random_state=random_state))
+                   for cov, nu in zip(hyper_covars, counts_covars)]
+    means = [norm.rvs(m, cov / k, random_state=random_state)
+             for m, cov, k in zip(hyper_means, covariances, counts_means)]
     return means, covariances
 
 
@@ -183,12 +183,12 @@ def _sample_gaussian_parameters_spherical(counts_means, hyper_means, counts_cova
         The covariance matrix of the current components.
     """
     from scipy.stats import invwishart, wishart, norm
-    # precisions = [wishart.rvs(n, pre / n, random_state=random_state)
-    #               for pre, n in zip(hyper_precis, count_precis)]
-    covariances = [invwishart.rvs(n, cov * n, random_state=random_state)
-                   for cov, n in zip(hyper_covars, counts_covars)]
-    means = [norm.rvs(m, cov / n, random_state=random_state)
-             for m, cov, n in zip(hyper_means, covariances, counts_means)]
+    # precisions = [wishart.rvs(nu, pre / nu, random_state=random_state)
+    #               for pre, nu in zip(hyper_precis, count_precis)]
+    covariances = [invwishart.rvs(nu, cov * nu, random_state=random_state)
+                   for cov, nu in zip(hyper_covars, counts_covars)]
+    means = [norm.rvs(m, cov / k, random_state=random_state)
+             for m, cov, k in zip(hyper_means, covariances, counts_means)]
     return means, covariances
 
 
@@ -274,6 +274,10 @@ def _estimate_log_t_prob(X, counts_means, means, count_precis, precisions_chol, 
     if covariance_type == 'tied':
         count_precis = np.sum(count_precis)
 
+    # Contrary to the original bishop book, the shape matrix is normalized,
+    # that is, it represents the maximum a posteriori covariances. I believe,
+    # the reason for this is to calculate maximum a posteriori probabilities
+    # the same way as in sklearn.mixture_models.GaussianMixture.
     df = count_precis - n_features + 1.0
     scale_pref = (counts_means + 1.0) * count_precis / (df * counts_means)
     # det(precision_chol) is half of det(precision)
@@ -305,6 +309,7 @@ def _estimate_log_t_prob(X, counts_means, means, count_precis, precisions_chol, 
                       np.outer(row_norms(X, squared=True), precisions))
 
     gams = gammaln(0.5 * (df + n_features)) - gammaln(0.5 * df)
+
     return gams - 0.5 * (n_features * np.log(df * np.pi) +
                          (df + n_features) * log1p(mx_product / (scale_pref * df))) + log_det
 
@@ -604,8 +609,7 @@ class BayesianGaussianMixture(_BaseBayesianGaussianMixture):
         """
         n_integral_points = self.n_integral_points
         if n_integral_points > 0:
-            saved_params = self._get_parameters()
-            proba = self._MC_log_posterior_predictive(X, saved_params, n_integral_points)
+            proba = self._MC_log_posterior_predictive(X, n_integral_points)
         else:
             proba = self._estimate_log_posterior_predictive_prob(X)
 
@@ -614,6 +618,11 @@ class BayesianGaussianMixture(_BaseBayesianGaussianMixture):
         else:
             proba -= np.log(self.n_components)
         return proba
+
+    def uninform_prior(self, what='all'):
+        # TODO: allow completely uninformed prior
+        # (officially not supported by bayesian_mixture, but it shall work)
+        raise NotImplementedError
 
     def score_samples(self, X):
         """Compute the weighted log probabilities for each sample.
@@ -811,7 +820,7 @@ class BayesianGaussianMixture(_BaseBayesianGaussianMixture):
             e2[:, i] = mvt.logpdf(X)
         pass
 
-    def _MC_log_posterior_predictive(self, X, hyper_params, n_integral_points):
+    def _MC_log_posterior_predictive(self, X, n_integral_points):
         """Predict the labels for the data samples in X using
         Monte Carlo sampled models.
 
@@ -832,6 +841,8 @@ class BayesianGaussianMixture(_BaseBayesianGaussianMixture):
 
         from sklearn.mixture.gaussian_mixture import GaussianMixture as SGM
         sgm = SGM(covariance_type=self.covariance_type)
+        hyper_params = (self.mean_precision_, self.degrees_of_freedom_, self.weights_,
+                        self.means_, self.covariances_, self.precisions_cholesky_)
         for base_params in self.progress_bar(
                 self._sample_base_params(hyper_params, n_integral_points)):
             sgm._set_parameters(base_params)
@@ -880,7 +891,7 @@ class BayesianGaussianMixture(_BaseBayesianGaussianMixture):
         labels : array, shape (n_samples,)
             Component labels.
         """
-        (classes_, counts_means_, counts_covar_, weights_, means_, covariances_,
+        (counts_means_, counts_covar_, weights_, means_, covariances_,
          precisions_cholesky_) = hyper_params
 
         for i in range(n_integral_points):
@@ -925,7 +936,7 @@ class BayesianGaussianMixture(_BaseBayesianGaussianMixture):
             self.covariance_type)
 
 
-class GaussianClassifier(MixtureClassifierMixin, GaussianMixture):
+class GaussianClassifier(MixtureClassifierMixin, BayesianGaussianMixture):
     """Gaussian Mixture.
 
     Representation of a Gaussian mixture model probability distribution.
