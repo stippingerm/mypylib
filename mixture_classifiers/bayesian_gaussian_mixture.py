@@ -1101,25 +1101,29 @@ class GaussianClassifier(MixtureClassifierMixin, BayesianGaussianMixture):
     # TODO: when sampling assign learned class instead of ordinals
     # (this can be done by an overload that hooks to the super class)
 
-    def __init__(self, n_components=1, covariance_type='full', tol=1e-3,
-                 reg_covar=1e-6, max_iter=100, n_init=1, init_params='kmeans', n_integral_points=100,
-                 classes_init=None, counts_means_init=None, counts_covar_init=None,
-                 weights_init=None, use_weights=True, means_init=None, precisions_init=None,
-                 random_state=None, warm_start=False,
-                 progress_bar=None, verbose=0, verbose_interval=10):
-        GaussianMixture.__init__(self,
-                                 n_components=n_components, covariance_type=covariance_type, tol=tol,
-                                 reg_covar=reg_covar, max_iter=max_iter, n_init=n_init, init_params=init_params,
-                                 weights_init=weights_init, means_init=means_init, precisions_init=precisions_init,
-                                 random_state=random_state, warm_start=warm_start, verbose=verbose,
-                                 verbose_interval=verbose_interval)
+    def __init__(self, n_components_per_class=1, covariance_type='full', tol=1e-3,
+                 reg_covar=1e-6, max_iter=100, n_init=1, init_params='kmeans', use_weights=True,
+                 classes_init=None, weight_concentration_prior_type='dirichlet_process',
+                 weight_concentration_prior=None,
+                 mean_precision_prior=None, mean_prior=None,
+                 degrees_of_freedom_prior=None, covariance_prior=None,
+                 n_integral_points=100, random_state=None, warm_start=False, verbose=0,
+                 verbose_interval=10, progress_bar=None):
+        BayesianGaussianMixture.__init__(self,
+                                         n_components=n_components_per_class, covariance_type=covariance_type, tol=tol,
+                                         reg_covar=reg_covar, max_iter=max_iter, n_init=n_init, init_params=init_params,
+                                         use_weights=use_weights,
+                                         weight_concentration_prior_type=weight_concentration_prior_type,
+                                         weight_concentration_prior=weight_concentration_prior,
+                                         mean_precision_prior=mean_precision_prior, mean_prior=mean_prior,
+                                         degrees_of_freedom_prior=degrees_of_freedom_prior,
+                                         covariance_prior=covariance_prior,
+                                         n_integral_points=n_integral_points, random_state=random_state,
+                                         warm_start=warm_start, verbose=verbose,
+                                         verbose_interval=verbose_interval, progress_bar=progress_bar)
         MixtureClassifierMixin.__init__(self)
-        self.n_integral_points = n_integral_points
-        self.use_weights = use_weights
         self.classes_init = classes_init
-        self.counts_means_init = counts_means_init
-        self.counts_covar_init = counts_covar_init
-        self.progress_bar = _no_progress_bar if progress_bar is None else progress_bar
+        self.n_components_per_class = n_components_per_class
 
     def decision_function(self, X):
         """Predict the labels for the data samples in X using trained model.
@@ -1137,139 +1141,44 @@ class GaussianClassifier(MixtureClassifierMixin, BayesianGaussianMixture):
         """
         self._check_is_fitted()
         X = _check_X(X, n_features=self.means_.shape[1])
-        n_integral_points = self.n_integral_points
-        if n_integral_points > 0:
-            saved_params = self._get_parameters()
-            ret = self._sampled_decision_function(X, saved_params, n_integral_points)
-        else:
-            if self.use_weights:
-                # ret = self._estimate_weighted_log_prob(X)
-                ret = self._estimate_log_bayesian_prob(X) + self._estimate_log_weights()
-            else:
-                ret = self._estimate_log_bayesian_prob(X)
-        return ret
-
-    def _sampled_decision_function(self, X, hyper_params, n_integral_points):
-        """Predict the labels for the data samples in X using trained model.
-
-        Parameters
-        ----------
-        X : array-like, shape (n_samples, n_features)
-            List of n_features-dimensional data points. Each row
-            corresponds to a single data point.
-
-        Returns
-        -------
-        ret : array, shape (n_samples, n_classes)
-            Component likelihoods.
-        """
-        self._check_is_fitted()
-        X = _check_X(X, n_features=self.means_.shape[1])
-        ret = np.array([[0]], dtype=float)
-
-        from .simple_gaussian_mixture import GaussianClassifier as SGM
-        sgm = SGM(covariance_type=self.covariance_type, use_weights=self.use_weights)
-        for base_params in self.progress_bar(
-                self._sample_base_params(hyper_params, n_integral_points)):
-            sgm._set_parameters(base_params)
-            if self.use_weights:
-                ret = ret + sgm._estimate_weighted_log_prob(X)
-            else:
-                ret = ret + sgm._estimate_log_prob(X)
-        return ret / n_integral_points
-
-    def _sample_base_params(self, hyper_params, n_integral_points):
-        """Predict the labels for the data samples in X using trained model.
-
-        Parameters
-        ----------
-        X : array-like, shape (n_samples, n_features)
-            List of n_features-dimensional data points. Each row
-            corresponds to a single data point.
-
-        Returns
-        -------
-        labels : array, shape (n_samples,)
-            Component labels.
-        """
-        (classes_, counts_means_, counts_covar_, weights_, means_, covariances_,
-         precisions_cholesky_) = hyper_params
-
-        for i in range(n_integral_points):
-            means, covariances = _sample_gaussian_parameters(
-                counts_means_, means_, counts_covar_, covariances_, self.covariance_type, self.random_state)
-            precisions_cholesky = _compute_precision_cholesky(
-                covariances, self.covariance_type)
-            yield classes_, weights_, means, covariances, precisions_cholesky
-
-    def fit(self, X, y):
-        classes_, self.counts_means_ = np.unique(y, return_counts=True)
-        self.counts_covar_ = self.counts_means_
-
-        # Delegate most of parameter checks
-        super(GaussianClassifier, self).fit(X, y)
-
-        if not np.all(self.classes_ == classes_):
-            raise ValueError('Implementation inconsistent, classes returned in different order')
-
-    # def predict(self, X):
-    #    return MixtureClassifierMixin.predict(self, X)
+        return self._dispatch_weighted_log_prob(X)
 
     def _get_parameters(self):
-        return (self.classes_, self.counts_means_, self.counts_covar_, self.weights_, self.means_, self.covariances_,
-                self.precisions_cholesky_)
+        base_params = super(GaussianClassifier, self)._get_parameters()
+        return (self.classes_, *base_params)
 
     def _set_parameters(self, params):
-        (self.classes_, self.counts_means_, self.counts_covar_, *base_params) = params
+        """
+        Parameters
+        ----------
+        """
+        (self.classes_, *base_params) = params
+        self.classes_ = np.array(self.classes_)
         super(GaussianClassifier, self)._set_parameters(base_params)
-
-    def _check_log_prob(self, X):
-        # for debug purposes only
-        from multivariate_distns import multivariate_t as MVT
-        e1 = _estimate_log_t_prob(
-            X, self.counts_means_, self.means_, self.counts_covar_, self.precisions_cholesky_, self.covariance_type)
-        e2 = np.empty_like(e1)
-        d = len(self.means_[0])
-        if self.covariance_type == "full":
-            covariances_ = self.covariances_
-        if self.covariance_type == "tied":
-            covariances_ = [self.covariances_ for k in self.counts_means_]
-        if self.covariance_type == "diag":
-            covariances_ = [np.diag(c) for c in self.covariances_]
-        if self.covariance_type == "spherical":
-            covariances_ = [np.diag(c * np.ones(d)) for c in self.covariances_]
-        for i, (k, m, c) in enumerate(zip(self.counts_means_, self.means_, covariances_)):
-            d = len(m)
-            if self.covariance_type == "tied":
-                n = np.sum(self.counts_covar_)
-            else:
-                n = k
-            df = n - d + 1
-            cov = (k + 1) / (k * df) * n * c
-            mvt = MVT.multivariate_t(df, m, cov)
-            e2[:, i] = mvt.logpdf(X)
-        pass
-
-    def _estimate_log_bayesian_prob(self, X):
-        # self._check_log_prob(X)
-        return _estimate_log_t_prob(
-            X, self.counts_means_, self.means_, self.counts_covar_, self.precisions_cholesky_, self.covariance_type)
+        self.n_components = len(self.means_)
 
 
 class FairTiedClassifier(GaussianClassifier):
-    def __init__(self, n_components=1, covariance_type='full', tol=1e-3,
-                 reg_covar=1e-6, max_iter=100, n_init=1, init_params='kmeans', n_integral_points=100,
-                 classes_init=None, weights_init=None, use_weights=True, means_init=None, precisions_init=None,
-                 random_state=None, warm_start=False,
-                 progress_bar=None, verbose=0, verbose_interval=10):
+    def __init__(self, n_components_per_class=1, covariance_type='full', tol=1e-3,
+                 reg_covar=1e-6, max_iter=100, n_init=1, init_params='kmeans', use_weights=True,
+                 classes_init=None, weight_concentration_prior_type='dirichlet_process',
+                 weight_concentration_prior=None,
+                 mean_precision_prior=None, mean_prior=None,
+                 degrees_of_freedom_prior=None, covariance_prior=None,
+                 n_integral_points=100, random_state=None, warm_start=False, verbose=0,
+                 verbose_interval=10, progress_bar=None):
         GaussianClassifier.__init__(self,
                                     n_components=n_components, covariance_type=covariance_type, tol=tol,
                                     reg_covar=reg_covar, max_iter=max_iter, n_init=n_init, init_params=init_params,
-                                    n_integral_points=n_integral_points,
-                                    classes_init=classes_init, weights_init=weights_init, use_weights=use_weights,
-                                    means_init=means_init, precisions_init=precisions_init,
-                                    random_state=random_state, warm_start=warm_start, verbose=verbose,
-                                    progress_bar=progress_bar, verbose_interval=verbose_interval)
+                                    use_weights=use_weights, classes_init=classes_init,
+                                    weight_concentration_prior_type=weight_concentration_prior_type,
+                                    weight_concentration_prior=weight_concentration_prior,
+                                    mean_precision_prior=mean_precision_prior, mean_prior=mean_prior,
+                                    degrees_of_freedom_prior=degrees_of_freedom_prior,
+                                    covariance_prior=covariance_prior,
+                                    n_integral_points=n_integral_points, random_state=random_state,
+                                    warm_start=warm_start, verbose=verbose,
+                                    verbose_interval=verbose_interval, progress_bar=progress_bar)
         if covariance_type != 'tied':
             raise ValueError('Fair covariance estimation is needed only in the tied case.')
 
@@ -1295,12 +1204,12 @@ class FairTiedClassifier(GaussianClassifier):
             the point of each sample in X.
         """
         n_samples, _ = X.shape
-        self.weights_, self.means_, self.covariances_ = (
-            _estimate_gaussian_parameters(X, np.exp(log_resp), self.reg_covar,
-                                          self.covariance_type, self.random_state))
-        self.weights_ /= n_samples
-        self.precisions_cholesky_ = _compute_precision_cholesky(
-            self.covariances_, self.covariance_type)
+
+        nk, fk, xk, sk = _estimate_fair_gaussian_parameters(
+            X, np.exp(log_resp), self.reg_covar, self.covariance_type, self.random_state)
+        self._estimate_weights(nk)
+        self._estimate_means(nk, xk)
+        self._estimate_precisions(fk, xk, sk)
 
 
 def exampleClassifier(n_components, n_features, covariance_type='full', random_state=None):
@@ -1310,7 +1219,8 @@ def exampleClassifier(n_components, n_features, covariance_type='full', random_s
     covariances, precisions = {'full': _fullCorr, 'tied': _tiedCorr, 'diag': _diagCorr,
                                'spherical': _sphericalCorr}[covariance_type](n_components, n_features,
                                                                              random_state=random_state)
-
-    clf = GaussianClassifier(n_components=n_components, covariance_type=covariance_type, random_state=random_state)
-    clf._set_parameters((weights, means, covariances, precisions))
+    classes = np.arange(n_components)
+    df = np.full(n_components, 42)
+    clf = GaussianClassifier(n_components_per_class=1, covariance_type=covariance_type, random_state=random_state)
+    clf._set_parameters((classes, weights, df, means, df, covariances, precisions))
     return clf
