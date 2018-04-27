@@ -1151,6 +1151,13 @@ class GaussianClassifier(MixtureClassifierMixin, BayesianGaussianMixture):
         """
         Parameters
         ----------
+        classes_
+        weight_concentration_
+        mean_precision_
+        means_
+        degrees_of_freedom_
+        covariances_,
+        precisions_cholesky_
         """
         (self.classes_, *base_params) = params
         self.classes_ = np.array(self.classes_)
@@ -1168,7 +1175,7 @@ class FairTiedClassifier(GaussianClassifier):
                  n_integral_points=100, random_state=None, warm_start=False, verbose=0,
                  verbose_interval=10, progress_bar=None):
         GaussianClassifier.__init__(self,
-                                    n_components=n_components, covariance_type=covariance_type, tol=tol,
+                                    n_components_per_class=n_components_per_class, covariance_type=covariance_type, tol=tol,
                                     reg_covar=reg_covar, max_iter=max_iter, n_init=n_init, init_params=init_params,
                                     use_weights=use_weights, classes_init=classes_init,
                                     weight_concentration_prior_type=weight_concentration_prior_type,

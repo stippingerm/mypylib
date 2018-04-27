@@ -285,7 +285,7 @@ class GaussianClassifier(MixtureClassifierMixin, GaussianMixture):
                  random_state=None, warm_start=False,
                  verbose=0, verbose_interval=10):
         GaussianMixture.__init__(self,
-                                 n_components=n_components, covariance_type=covariance_type, tol=tol,
+                                 n_components=n_components_per_class, covariance_type=covariance_type, tol=tol,
                                  reg_covar=reg_covar, max_iter=max_iter, n_init=n_init, init_params=init_params,
                                  weights_init=weights_init, means_init=means_init, precisions_init=precisions_init,
                                  random_state=random_state, warm_start=warm_start, verbose=verbose,
@@ -293,6 +293,7 @@ class GaussianClassifier(MixtureClassifierMixin, GaussianMixture):
         MixtureClassifierMixin.__init__(self)
         self.use_weights = use_weights
         self.classes_init = classes_init
+        self.n_components_per_class = n_components_per_class
 
     def decision_function(self, X):
         """Predict the labels for the data samples in X using trained model.
@@ -363,7 +364,7 @@ class FairTiedClassifier(GaussianClassifier):
                  random_state=None, warm_start=False,
                  verbose=0, verbose_interval=10):
         GaussianClassifier.__init__(self,
-                                    n_components=n_components, covariance_type=covariance_type, tol=tol,
+                                    n_components_per_class=n_components, covariance_type=covariance_type, tol=tol,
                                     reg_covar=reg_covar, max_iter=max_iter, n_init=n_init, init_params=init_params,
                                     classes_init=classes_init, weights_init=weights_init, use_weights=use_weights,
                                     means_init=means_init, precisions_init=precisions_init,
@@ -437,6 +438,6 @@ def exampleClassifier(n_components, n_features, covariance_type='full', random_s
                                'spherical': _sphericalCorr}[covariance_type](n_components, n_features,
                                                                              random_state=random_state)
     classes = np.arange(n_components)
-    clf = GaussianClassifier(n_components=n_components, covariance_type=covariance_type, random_state=random_state)
+    clf = GaussianClassifier(n_components_per_class=1, covariance_type=covariance_type, random_state=random_state)
     clf._set_parameters((classes, weights, means, covariances, precisions))
     return clf

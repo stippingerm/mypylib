@@ -366,6 +366,7 @@ class PluginClassifier(MixtureClassifierMixin, BaseMixture):
         MixtureClassifierMixin.__init__(self)
         self.stat = stat
         self.mv_stat = _infer_stat_type(stat, mv_stat)
+        self.n_components_per_class = 1
         self.params_init = params_init
         self.use_weights = use_weights
         self.weights_init = weights_init

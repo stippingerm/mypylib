@@ -35,7 +35,7 @@ from sklearn.utils import check_array, check_random_state
 from sklearn.exceptions import ConvergenceWarning
 
 
-def _normalize_log_prob(self, weighted_log_prob):
+def _normalize_log_prob(weighted_log_prob):
     """Estimate log probabilities and responsibilities for each sample.
 
     Compute the log probabilities, weighted log probabilities per
@@ -84,7 +84,7 @@ def _make_multi_responsibility_mask(classes, n_components, y):
     class_start_indices = np.cumsum([0, *n_components])
     column_select = np.squeeze(np.searchsorted(classes, y, side='left'))
     n_samples = len(y)
-    resp = np.zeros((n_samples, n_components))
+    resp = np.zeros((n_samples, class_start_indices[-1]))
     for (i_sample, i_class) in zip(range(0, n_samples), column_select):
         component_range = class_start_indices[[i_class, i_class+1]]
         resp[i_sample, slice(*component_range)] = 1.0
@@ -120,32 +120,34 @@ class MixtureClassifierMixin(ClassifierMixin):
     """
 
     def __init__(self):
-        self.classes_ = []
+        self.classes_ = np.array([])
+        self._refuse_inf_resp = True
 
-    def make_responsibilities(self, y):
-        if np.any(self.n_components != 1):
-            raise NotImplementedError
-            mask = _make_multi_responsibility_mask(self.classes_, self.n_components, y)
+    def _make_responsibilities(self, y):
+        if np.any(self.n_components_per_class != 1):
+            mask = _make_multi_responsibility_mask(self.classes_, self.n_components_per_class, y)
             resp = mask / np.sum(mask, axis=1)
         else:
             resp = _make_single_responsibility_mask(self.classes_, y)
         return resp
 
-    def limit_log_resp(self, log_resp, y):
-        if np.any(self.n_components != 1):
-            raise NotImplementedError
-            mask = _make_multi_responsibility_mask(self.classes_, self.n_components, y)
-            with np.errstate(divide='ignore'):
-                # ignore log(zero)
-                log_mask = np.log(mask)
+    def _limit_log_resp(self, log_resp, y):
+        with np.errstate(divide='ignore'):
+            # ignore log(zero)
+            log_mask = np.log(self._make_responsibilities(y))
+        if np.any(self.n_components_per_class != 1):
             limited_log_resp = _normalize_log_prob(log_resp + log_mask)
         else:
-            mask = _make_single_responsibility_mask(self.classes_, y)
-            with np.errstate(divide='ignore'):
-                # ignore log(zero)
-                log_mask = np.log(mask)
             limited_log_resp = log_mask
+        if self._refuse_inf_resp:
+            limited_log_resp = np.maximum(limited_log_resp, np.finfo(float).min)
         return limited_log_resp
+
+    def _relabel_samples(self, X, y):
+        n_classes = len(self.classes_)
+        n_components = np.broadcast_to(self.n_components_per_class, n_classes)
+        ids = np.digitize(y, np.cumsum([0, *n_components], dtype=int))-1
+        return X, self.classes_[list(ids)]
 
     @abstractmethod
     def decision_function(self, X):
@@ -207,12 +209,14 @@ class MixtureClassifierMixin(ClassifierMixin):
 
         self.classes_ = np.unique(y)
         n_classes = len(self.classes_)
+        self.n_components = np.sum(np.broadcast_to(self.n_components_per_class, n_classes))
 
         # if we enable warm_start, we will have a unique initialisation
         do_init = not (self.warm_start and hasattr(self, 'converged_'))
         n_init = self.n_init if do_init else 1
 
-        analytic_solution = np.all(self.n_components == 1)
+        # Addendum N°1: if analytically solvable, do not iterate
+        analytic_solution = np.all(self.n_components_per_class == 1)
         max_iter = 1 if analytic_solution else self.max_iter
 
         max_lower_bound = -np.infty
@@ -231,10 +235,9 @@ class MixtureClassifierMixin(ClassifierMixin):
             for n_iter in range(max_iter):
                 prev_lower_bound = self.lower_bound_
 
-                log_prob_norm, log_resp_omit = self._e_step(X)
-                with np.errstate(divide='ignore'):
-                    # ignore log(zero)
-                    log_resp = np.log(self.make_responsibilities(y))
+                log_prob_norm, log_resp = self._e_step(X)
+                # Addendum N°2: limit responsibilities to classes
+                log_resp = self._limit_log_resp(log_resp, y)
                 self._m_step(X, log_resp)
                 self.lower_bound_ = self._compute_lower_bound(
                     log_resp, log_prob_norm)
