@@ -202,8 +202,10 @@ def _sample_gaussian_parameters(counts_means, hyper_means, counts_covars, hyper_
     return np.array(means), np.array(covariances)
 
 
-def _estimate_log_gaussian_prob(X, counts_means, means, count_precis, precisions_chol, covariance_type):
+def _estimate_log_t_prob(X, counts_means, means, count_precis, precisions_chol, covariance_type):
     """Estimate the full Bayesian log Gaussian probability.
+    This is the posterior predictive of each class, i.e., a multivariate t probability.
+    Note: this does not take into account the probability of belonging to that class.
 
     Parameters
     ----------
@@ -483,7 +485,7 @@ class GaussianClassifier(MixtureClassifierMixin, GaussianMixture):
         n_integral_points = self.n_integral_points
         if n_integral_points > 0:
             saved_params = self._get_parameters()
-            ret = self._sample_decision_function(X, saved_params, n_integral_points)
+            ret = self._sampled_decision_function(X, saved_params, n_integral_points)
         else:
             if self.use_weights:
                 # ret = self._estimate_weighted_log_prob(X)
@@ -492,7 +494,7 @@ class GaussianClassifier(MixtureClassifierMixin, GaussianMixture):
                 ret = self._estimate_log_bayesian_prob(X)
         return ret
 
-    def _sample_decision_function(self, X, hyper_params, n_integral_points):
+    def _sampled_decision_function(self, X, hyper_params, n_integral_points):
         """Predict the labels for the data samples in X using trained model.
 
         Parameters
@@ -569,7 +571,7 @@ class GaussianClassifier(MixtureClassifierMixin, GaussianMixture):
     def _check_log_prob(self, X):
         # for debug purposes only
         from multivariate_distns import multivariate_t as MVT
-        e1 = _estimate_log_gaussian_prob(
+        e1 = _estimate_log_t_prob(
             X, self.counts_means_, self.means_, self.counts_covar_, self.precisions_cholesky_, self.covariance_type)
         e2 = np.empty_like(e1)
         d = len(self.means_[0])
@@ -595,7 +597,7 @@ class GaussianClassifier(MixtureClassifierMixin, GaussianMixture):
 
     def _estimate_log_bayesian_prob(self, X):
         # self._check_log_prob(X)
-        return _estimate_log_gaussian_prob(
+        return _estimate_log_t_prob(
             X, self.counts_means_, self.means_, self.counts_covar_, self.precisions_cholesky_, self.covariance_type)
 
 
