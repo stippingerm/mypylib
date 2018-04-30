@@ -13,6 +13,7 @@ import numpy as np
 # sklearn.mixture.gaussian_mixture
 from sklearn.mixture.gaussian_mixture import GaussianMixture, _estimate_gaussian_covariances_tied, \
     _compute_precision_cholesky
+from sklearn.utils import check_random_state
 from sklearn.utils import check_array
 from sklearn.utils.validation import check_is_fitted
 # sklearn.mixture.base
@@ -385,9 +386,10 @@ class FairTiedClassifier(GaussianClassifier):
             the point of each sample in X.
         """
         n_samples, _ = X.shape
+        random_state = check_random_state(self.random_state)
         self.weights_, _, self.means_, self.covariances_ = (
             _estimate_fair_gaussian_parameters(X, np.exp(log_resp), self.reg_covar,
-                                               self.covariance_type, self.random_state))
+                                               self.covariance_type, random_state))
         self.weights_ /= n_samples
         self.precisions_cholesky_ = _compute_precision_cholesky(
             self.covariances_, self.covariance_type)

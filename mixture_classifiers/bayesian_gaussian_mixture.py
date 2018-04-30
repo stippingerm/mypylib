@@ -1211,9 +1211,10 @@ class FairTiedClassifier(GaussianClassifier):
             the point of each sample in X.
         """
         n_samples, _ = X.shape
+        random_state = check_random_state(self.random_state)
 
         nk, fk, xk, sk = _estimate_fair_gaussian_parameters(
-            X, np.exp(log_resp), self.reg_covar, self.covariance_type, self.random_state)
+            X, np.exp(log_resp), self.reg_covar, self.covariance_type, random_state)
         self._estimate_weights(nk)
         self._estimate_means(nk, xk)
         self._estimate_precisions(fk, xk, sk)
