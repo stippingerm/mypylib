@@ -570,6 +570,9 @@ class BayesianGaussianMixture(_BaseBayesianGaussianMixture):
        <http://www.cs.princeton.edu/courses/archive/fall11/cos597C/reading/BleiJordan2005.pdf>`_
     """
 
+    # TODO: in _check_precision_parameters the prior ddf is required to be >= n_features
+    # but formulas can already be evaluated if that is true for the posterior
+
     def __init__(self, n_components=1, covariance_type='full', tol=1e-3,
                  reg_covar=1e-6, max_iter=100, n_init=1, init_params='kmeans', use_weights=True,
                  weight_concentration_prior_type='dirichlet_process',
@@ -936,7 +939,7 @@ class BayesianGaussianMixture(_BaseBayesianGaussianMixture):
             self.covariance_type)
 
 
-class GaussianClassifier(MixtureClassifierMixin, BayesianGaussianMixture):
+class BayesianGaussianClassifier(MixtureClassifierMixin, BayesianGaussianMixture):
     """Gaussian Mixture.
 
     Representation of a Gaussian mixture model probability distribution.
@@ -1144,7 +1147,7 @@ class GaussianClassifier(MixtureClassifierMixin, BayesianGaussianMixture):
         return self._dispatch_weighted_log_prob(X)
 
     def _get_parameters(self):
-        base_params = super(GaussianClassifier, self)._get_parameters()
+        base_params = super(BayesianGaussianClassifier, self)._get_parameters()
         return (self.classes_, *base_params)
 
     def _set_parameters(self, params):
@@ -1161,11 +1164,11 @@ class GaussianClassifier(MixtureClassifierMixin, BayesianGaussianMixture):
         """
         (self.classes_, *base_params) = params
         self.classes_ = np.array(self.classes_)
-        super(GaussianClassifier, self)._set_parameters(base_params)
+        super(BayesianGaussianClassifier, self)._set_parameters(base_params)
         self.n_components = len(self.means_)
 
 
-class FairTiedClassifier(GaussianClassifier):
+class BayesianFairTiedClassifier(BayesianGaussianClassifier):
     def __init__(self, n_components_per_class=1, covariance_type='full', tol=1e-3,
                  reg_covar=1e-6, max_iter=100, n_init=1, init_params='kmeans', use_weights=True,
                  classes_init=None, weight_concentration_prior_type='dirichlet_process',
@@ -1174,18 +1177,18 @@ class FairTiedClassifier(GaussianClassifier):
                  degrees_of_freedom_prior=None, covariance_prior=None,
                  n_integral_points=100, random_state=None, warm_start=False, verbose=0,
                  verbose_interval=10, progress_bar=None):
-        GaussianClassifier.__init__(self,
-                                    n_components_per_class=n_components_per_class, covariance_type=covariance_type, tol=tol,
-                                    reg_covar=reg_covar, max_iter=max_iter, n_init=n_init, init_params=init_params,
-                                    use_weights=use_weights, classes_init=classes_init,
-                                    weight_concentration_prior_type=weight_concentration_prior_type,
-                                    weight_concentration_prior=weight_concentration_prior,
-                                    mean_precision_prior=mean_precision_prior, mean_prior=mean_prior,
-                                    degrees_of_freedom_prior=degrees_of_freedom_prior,
-                                    covariance_prior=covariance_prior,
-                                    n_integral_points=n_integral_points, random_state=random_state,
-                                    warm_start=warm_start, verbose=verbose,
-                                    verbose_interval=verbose_interval, progress_bar=progress_bar)
+        BayesianGaussianClassifier.__init__(self,
+                                            n_components_per_class=n_components_per_class, covariance_type=covariance_type, tol=tol,
+                                            reg_covar=reg_covar, max_iter=max_iter, n_init=n_init, init_params=init_params,
+                                            use_weights=use_weights, classes_init=classes_init,
+                                            weight_concentration_prior_type=weight_concentration_prior_type,
+                                            weight_concentration_prior=weight_concentration_prior,
+                                            mean_precision_prior=mean_precision_prior, mean_prior=mean_prior,
+                                            degrees_of_freedom_prior=degrees_of_freedom_prior,
+                                            covariance_prior=covariance_prior,
+                                            n_integral_points=n_integral_points, random_state=random_state,
+                                            warm_start=warm_start, verbose=verbose,
+                                            verbose_interval=verbose_interval, progress_bar=progress_bar)
         if covariance_type != 'tied':
             raise ValueError('Fair covariance estimation is needed only in the tied case.')
 
@@ -1194,7 +1197,7 @@ class FairTiedClassifier(GaussianClassifier):
         self.counts_covar_ = self.counts_means_ / len(classes_)
 
         # Delegate most of parameter checks
-        super(GaussianClassifier, self).fit(X, y)
+        super(BayesianGaussianClassifier, self).fit(X, y)
 
         if not np.all(self.classes_ == classes_):
             raise ValueError('Implementation inconsistent, classes returned in different order')
@@ -1229,6 +1232,6 @@ def exampleClassifier(n_components, n_features, covariance_type='full', random_s
                                                                              random_state=random_state)
     classes = np.arange(n_components)
     df = np.full(n_components, 42)
-    clf = GaussianClassifier(n_components_per_class=1, covariance_type=covariance_type, random_state=random_state)
+    clf = BayesianGaussianClassifier(n_components_per_class=1, covariance_type=covariance_type, random_state=random_state)
     clf._set_parameters((classes, weights, df, means, df, covariances, precisions))
     return clf
