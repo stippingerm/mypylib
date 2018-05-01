@@ -217,23 +217,9 @@ class PluginClassifier(MixtureClassifierMixin, BaseMixture):
     n_components : int or array-like shape (n_components,), defaults to 1.
         The number of mixture components per class. NOT IMPLEMENTED YET.
 
-    covariance_type : {'full', 'tied', 'diag', 'spherical'},
-            defaults to 'full'.
-        String describing the type of covariance parameters to use.
-        Must be one of::
-
-            'full' (each component has its own general covariance matrix),
-            'tied' (all components share the same general covariance matrix),
-            'diag' (each component has its own diagonal covariance matrix),
-            'spherical' (each component has its own single variance).
-
     tol : float, defaults to 1e-3.
         The convergence threshold. EM iterations will stop when the
         lower bound average gain is below this threshold.
-
-    reg_covar : float, defaults to 1e-6.
-        Non-negative regularization added to the diagonal of covariance.
-        Allows to assure that the covariance matrices are all positive.
 
     max_iter : int, defaults to 100.
         The number of EM iterations to perform.
@@ -253,7 +239,7 @@ class PluginClassifier(MixtureClassifierMixin, BaseMixture):
 
     classes_init : array-like, shape (n_components, ), optional
         The user-provided component to class assignments if n_components is
-        not 1. TO BE IMPLEMENTED
+        not 1. TODO: TO BE IMPLEMENTED
 
     weights_init : array-like, shape (n_components, ), optional
         The user-provided initial weights, defaults to None.
@@ -266,17 +252,6 @@ class PluginClassifier(MixtureClassifierMixin, BaseMixture):
     params_init : array-like, shape (n_components, n_features, n_shape_params), optional
         The user-provided initial means, defaults to None,
         If it None, shape parameters are initialized using the `init_params` method.
-
-    precisions_init : array-like, optional.
-        The user-provided initial precisions (inverse of the covariance
-        matrices), defaults to None.
-        If it None, precisions are initialized using the 'init_params' method.
-        The shape depends on 'covariance_type'::
-
-            (n_components,)                        if 'spherical',
-            (n_features, n_features)               if 'tied',
-            (n_components, n_features)             if 'diag',
-            (n_components, n_features, n_features) if 'full'
 
     random_state : int, RandomState instance or None, optional (default=None)
         If int, random_state is the seed used by the random number generator;
@@ -306,34 +281,6 @@ class PluginClassifier(MixtureClassifierMixin, BaseMixture):
     params_ : array-like, shape (n_components, n_features, n_shape_params)
         The mean of each mixture component.
 
-    precisions_ : array-like
-        The precision matrices for each component in the mixture. A precision
-        matrix is the inverse of a covariance matrix. A covariance matrix is
-        symmetric positive definite so the mixture of Gaussian can be
-        equivalently parameterized by the precision matrices. Storing the
-        precision matrices instead of the covariance matrices makes it more
-        efficient to compute the log-likelihood of new samples at test time.
-        The shape depends on `covariance_type`::
-
-            (n_components,)                        if 'spherical',
-            (n_features, n_features)               if 'tied',
-            (n_components, n_features)             if 'diag',
-            (n_components, n_features, n_features) if 'full'
-
-    precisions_cholesky_ : array-like
-        The cholesky decomposition of the precision matrices of each mixture
-        component. A precision matrix is the inverse of a covariance matrix.
-        A covariance matrix is symmetric positive definite so the mixture of
-        Gaussian can be equivalently parameterized by the precision matrices.
-        Storing the precision matrices instead of the covariance matrices makes
-        it more efficient to compute the log-likelihood of new samples at test
-        time. The shape depends on `covariance_type`::
-
-            (n_components,)                        if 'spherical',
-            (n_features, n_features)               if 'tied',
-            (n_components, n_features)             if 'diag',
-            (n_components, n_features, n_features) if 'full'
-
     converged_ : bool
         True when convergence was reached in fit(), False otherwise.
 
@@ -353,13 +300,11 @@ class PluginClassifier(MixtureClassifierMixin, BaseMixture):
     # TODO: when sampling assign learned class instead of ordinals
     # (this can be done by an overload that hooks to the super class)
 
-    def __init__(self, stat, n_components=1, tol=1e-3,
-                 reg_covar=1e-6, max_iter=100, n_init=1, init_params='kmeans',
-                 classes_init=None, weights_init=None, use_weights=True, params_init=None, precisions_init=None,
-                 random_state=None, warm_start=False,
-                 verbose=0, verbose_interval=10, mv_stat=None):
+    def __init__(self, stat, n_components=1, tol=1e-3, max_iter=100, n_init=1, init_params='kmeans', classes_init=None,
+                 weights_init=None, use_weights=True, params_init=None, random_state=None, warm_start=False, verbose=0,
+                 verbose_interval=10, mv_stat=None):
         BaseMixture.__init__(self,
-                             n_components=n_components, tol=tol, reg_covar=reg_covar,
+                             n_components=n_components, tol=tol, reg_covar=0, 
                              max_iter=max_iter, n_init=n_init, init_params=init_params,
                              random_state=random_state, warm_start=warm_start,
                              verbose=verbose, verbose_interval=verbose_interval)
@@ -431,6 +376,9 @@ class PluginClassifier(MixtureClassifierMixin, BaseMixture):
         self.weights_ = (weights if self.weights_init is None
         else self.weights_init)
         self.params_ = params if self.params_init is None else self.params_init
+
+    # TODO: def _e_step(self, X):
+    # override gaussian
 
     def _m_step(self, X, log_resp):
         """M step.
