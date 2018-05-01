@@ -16,7 +16,7 @@ from sklearn.utils.fixes import logsumexp
 from sklearn.utils import check_random_state
 from sklearn.mixture.gaussian_mixture import GaussianMixture, _compute_precision_cholesky, _compute_log_det_cholesky
 from sklearn.mixture.bayesian_mixture import BayesianGaussianMixture as _BaseBayesianGaussianMixture
-from .simple_gaussian_mixture import _fullCorr, _tiedCorr, _diagCorr, _sphericalCorr, _estimate_fair_gaussian_parameters
+from .gaussian_mixture import _fullCorr, _tiedCorr, _diagCorr, _sphericalCorr, _estimate_fair_gaussian_parameters
 
 from sklearn.utils import check_array
 from sklearn.utils.validation import check_is_fitted
