@@ -304,7 +304,7 @@ class PluginClassifier(MixtureClassifierMixin, BaseMixture):
                  weights_init=None, use_weights=True, params_init=None, random_state=None, warm_start=False, verbose=0,
                  verbose_interval=10, mv_stat=None):
         BaseMixture.__init__(self,
-                             n_components=n_components, tol=tol, reg_covar=0, 
+                             n_components=n_components, tol=tol, reg_covar=0,
                              max_iter=max_iter, n_init=n_init, init_params=init_params,
                              random_state=random_state, warm_start=warm_start,
                              verbose=verbose, verbose_interval=verbose_interval)

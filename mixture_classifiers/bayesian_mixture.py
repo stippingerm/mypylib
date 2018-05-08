@@ -21,7 +21,7 @@ from .gaussian_mixture import _fullCorr, _tiedCorr, _diagCorr, _sphericalCorr, _
 from sklearn.utils import check_array
 from sklearn.utils.validation import check_is_fitted
 # sklearn.mixture.base
-from sklearn.mixture.base import _check_X
+from sklearn.mixture.base import _check_X, _check_shape
 from sklearn.utils.extmath import row_norms
 # classifiers
 
@@ -314,6 +314,66 @@ def _estimate_log_t_prob(X, counts_means, means, count_precis, precisions_chol, 
                          (df + n_features) * log1p(mx_product / (scale_pref * df))) + log_det
 
 
+class UninformedPriorChecks(object):
+    """Uninformed priors for the Variational Bayesian estimation of a Gaussian mixture.
+
+    This class allows to uninformed priors that do not bias the results in any way. In
+    this setting the maximum a posteriori estimates implemented in
+    `sklearn.mixture.bayesian_mixture.BayesianGaussianMixture` becomes the same as the
+    maximum likelihood estimation of `sklearn.mixture.gaussian_mixture.GaussianMixture`.
+    Sampling from the uninformed prior with no data is unadvised / may raise an error.
+    Yet, the rationale behind using uninformed prior is to still have access to the
+    posterior predictive distribution `_estimate_log_posterior_predictive_prob`.
+    """
+
+    def _check_means_parameters(self, X):
+        """Check the parameters of the Gaussian distribution.
+
+        Parameters
+        ----------
+        X : array-like, shape (n_samples, n_features)
+        """
+        _, n_features = X.shape
+
+        if self.mean_precision_prior is None:
+            self.mean_precision_prior_ = 0.  # uninformed
+        elif self.mean_precision_prior >= 0.:
+            self.mean_precision_prior_ = self.mean_precision_prior
+        else:
+            raise ValueError("The parameter 'mean_precision_prior' should be "
+                             "greater than 0., but got %.3f."
+                             % self.mean_precision_prior)
+
+        if self.mean_prior is None:
+            self.mean_prior_ = X.mean(axis=0)
+        else:
+            self.mean_prior_ = check_array(self.mean_prior,
+                                           dtype=[np.float64, np.float32],
+                                           ensure_2d=False)
+            _check_shape(self.mean_prior_, (n_features, ), 'means')
+
+    def _check_precision_parameters(self, X):
+        """Check the prior parameters of the precision distribution.
+
+        Parameters
+        ----------
+        X : array-like, shape (n_samples, n_features)
+        """
+        n_samples, n_features = X.shape
+
+        # NOTE: as the data is used to estimate n_classes different components
+        # the original least degrees_of_freedom_prior being n_features was not
+        # a valid prior either. Since responsibilities were < 1.
+        if self.degrees_of_freedom_prior is None:
+            self.degrees_of_freedom_prior_ = np.maximum(0., n_features-n_samples)
+        elif self.degrees_of_freedom_prior >= n_features - n_samples:
+            self.degrees_of_freedom_prior_ = self.degrees_of_freedom_prior
+        else:
+            raise ValueError("The parameter 'degrees_of_freedom_prior' "
+                             "should be greater than %d, but got %.3f."
+                             % (n_features - n_samples, self.degrees_of_freedom_prior))
+
+
 class BayesianGaussianMixture(_BaseBayesianGaussianMixture):
     """Variational Bayesian estimation of a Gaussian mixture.
 
@@ -549,6 +609,10 @@ class BayesianGaussianMixture(_BaseBayesianGaussianMixture):
             (n_features)             if 'diag',
             float                    if 'spherical'
 
+    use_uninformed_prior : bool
+        Use uniformed (completely agnostic) prior that does not introduce
+        any bias. When set to True training requires sufficient samples.
+
     See Also
     --------
     GaussianMixture : Finite Gaussian mixture fit with EM.
@@ -579,6 +643,7 @@ class BayesianGaussianMixture(_BaseBayesianGaussianMixture):
                  weight_concentration_prior=None,
                  mean_precision_prior=None, mean_prior=None,
                  degrees_of_freedom_prior=None, covariance_prior=None,
+                 use_uninformed_prior=False,
                  n_integral_points=100, random_state=None, warm_start=False, verbose=0,
                  verbose_interval=10, progress_bar=None):
         super(BayesianGaussianMixture, self).__init__(
@@ -594,6 +659,19 @@ class BayesianGaussianMixture(_BaseBayesianGaussianMixture):
         self.n_integral_points = n_integral_points
         self.use_weights = use_weights
         self.progress_bar = _no_progress_bar if progress_bar is None else progress_bar
+        self.use_uninformed_prior = use_uninformed_prior
+
+    def _check_means_parameters(self, X):
+        if self.use_uninformed_prior:
+            UninformedPriorChecks._check_means_parameters(self, X)
+        else:
+            super(BayesianGaussianMixture, self)._check_means_parameters(X)
+
+    def _check_precision_parameters(self, X):
+        if self.use_uninformed_prior:
+            UninformedPriorChecks._check_precision_parameters(self, X)
+        else:
+            super(BayesianGaussianMixture, self)._check_precision_parameters(X)
 
     def _dispatch_weighted_log_prob(self, X):
         """Predict posterior probability of samples just like `_estimate_weighted_log_prob`
@@ -1110,6 +1188,7 @@ class BayesianGaussianClassifier(MixtureClassifierMixin, BayesianGaussianMixture
                  weight_concentration_prior=None,
                  mean_precision_prior=None, mean_prior=None,
                  degrees_of_freedom_prior=None, covariance_prior=None,
+                 use_uninformed_prior=False,
                  n_integral_points=100, random_state=None, warm_start=False, verbose=0,
                  verbose_interval=10, progress_bar=None):
         BayesianGaussianMixture.__init__(self,
@@ -1121,6 +1200,7 @@ class BayesianGaussianClassifier(MixtureClassifierMixin, BayesianGaussianMixture
                                          mean_precision_prior=mean_precision_prior, mean_prior=mean_prior,
                                          degrees_of_freedom_prior=degrees_of_freedom_prior,
                                          covariance_prior=covariance_prior,
+                                         use_uninformed_prior=use_uninformed_prior,
                                          n_integral_points=n_integral_points, random_state=random_state,
                                          warm_start=warm_start, verbose=verbose,
                                          verbose_interval=verbose_interval, progress_bar=progress_bar)
@@ -1175,6 +1255,7 @@ class BayesianFairTiedClassifier(BayesianGaussianClassifier):
                  weight_concentration_prior=None,
                  mean_precision_prior=None, mean_prior=None,
                  degrees_of_freedom_prior=None, covariance_prior=None,
+                 use_uninformed_prior=False,
                  n_integral_points=100, random_state=None, warm_start=False, verbose=0,
                  verbose_interval=10, progress_bar=None):
         BayesianGaussianClassifier.__init__(self,
@@ -1186,6 +1267,7 @@ class BayesianFairTiedClassifier(BayesianGaussianClassifier):
                                             mean_precision_prior=mean_precision_prior, mean_prior=mean_prior,
                                             degrees_of_freedom_prior=degrees_of_freedom_prior,
                                             covariance_prior=covariance_prior,
+                                            use_uninformed_prior=use_uninformed_prior,
                                             n_integral_points=n_integral_points, random_state=random_state,
                                             warm_start=warm_start, verbose=verbose,
                                             verbose_interval=verbose_interval, progress_bar=progress_bar)
