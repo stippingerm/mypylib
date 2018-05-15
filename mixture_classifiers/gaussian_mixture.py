@@ -129,7 +129,7 @@ class GaussianClassifier(MixtureClassifierMixin, GaussianMixture):
 
     Parameters
     ----------
-    n_components : int or array-like shape (n_components,), defaults to 1.
+    n_components_per_class : int or array-like shape (n_components,), defaults to 1.
         The number of mixture components per class. TODO: IMPLEMENT OTHER THAN 1.
 
     covariance_type : {'full', 'tied', 'diag', 'spherical'},

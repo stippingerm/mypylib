@@ -878,21 +878,21 @@ class BayesianGaussianMixture(_BaseBayesianGaussianMixture):
         # for debug purposes only
         from multivariate_distns import multivariate_t as MVT
         e1 = _estimate_log_t_prob(
-            X, self.counts_means_, self.means_, self.counts_covar_, self.precisions_cholesky_, self.covariance_type)
+            X, self.mean_precision_, self.means_, self.degrees_of_freedom_, self.precisions_cholesky_, self.covariance_type)
         e2 = np.empty_like(e1)
         d = len(self.means_[0])
         if self.covariance_type == "full":
             covariances_ = self.covariances_
         if self.covariance_type == "tied":
-            covariances_ = [self.covariances_ for k in self.counts_means_]
+            covariances_ = [self.covariances_ for k in self.mean_precision_]
         if self.covariance_type == "diag":
             covariances_ = [np.diag(c) for c in self.covariances_]
         if self.covariance_type == "spherical":
             covariances_ = [np.diag(c * np.ones(d)) for c in self.covariances_]
-        for i, (k, m, c) in enumerate(zip(self.counts_means_, self.means_, covariances_)):
+        for i, (k, m, c) in enumerate(zip(self.mean_precision_, self.means_, covariances_)):
             d = len(m)
             if self.covariance_type == "tied":
-                n = np.sum(self.counts_covar_)
+                n = np.sum(self.degrees_of_freedom_)
             else:
                 n = k
             df = n - d + 1
@@ -972,12 +972,12 @@ class BayesianGaussianMixture(_BaseBayesianGaussianMixture):
         labels : array, shape (n_samples,)
             Component labels.
         """
-        (counts_means_, counts_covar_, weights_, means_, covariances_,
+        (mean_precision_, degrees_of_freedom_, weights_, means_, covariances_,
          precisions_cholesky_) = hyper_params
 
         for i in range(n_integral_points):
             means, covariances = _sample_gaussian_parameters(
-                counts_means_, means_, counts_covar_, covariances_, self.covariance_type, self.random_state)
+                mean_precision_, means_, degrees_of_freedom_, covariances_, self.covariance_type, self.random_state)
             precisions_cholesky = _compute_precision_cholesky(
                 covariances, self.covariance_type)
             yield weights_, means, covariances, precisions_cholesky
@@ -986,21 +986,21 @@ class BayesianGaussianMixture(_BaseBayesianGaussianMixture):
         # for debug purposes only
         from multivariate_distns import multivariate_t as MVT
         e1 = _estimate_log_t_prob(
-            X, self.counts_means_, self.means_, self.counts_covar_, self.precisions_cholesky_, self.covariance_type)
+            X, self.mean_precision_, self.means_, self.degrees_of_freedom_, self.precisions_cholesky_, self.covariance_type)
         e2 = np.empty_like(e1)
         d = len(self.means_[0])
         if self.covariance_type == "full":
             covariances_ = self.covariances_
         if self.covariance_type == "tied":
-            covariances_ = [self.covariances_ for k in self.counts_means_]
+            covariances_ = [self.covariances_ for k in self.mean_precision_]
         if self.covariance_type == "diag":
             covariances_ = [np.diag(c) for c in self.covariances_]
         if self.covariance_type == "spherical":
             covariances_ = [np.diag(c * np.ones(d)) for c in self.covariances_]
-        for i, (k, m, c) in enumerate(zip(self.counts_means_, self.means_, covariances_)):
+        for i, (k, m, c) in enumerate(zip(self.mean_precision_, self.means_, covariances_)):
             d = len(m)
             if self.covariance_type == "tied":
-                n = np.sum(self.counts_covar_)
+                n = np.sum(self.degrees_of_freedom_)
             else:
                 n = k
             df = n - d + 1
