@@ -660,6 +660,7 @@ class BayesianGaussianMixture(_BaseBayesianGaussianMixture):
         self.use_weights = use_weights
         self.progress_bar = _no_progress_bar if progress_bar is None else progress_bar
         self.use_uninformed_prior = use_uninformed_prior
+        #self._select_prior_checking()
 
     def _check_means_parameters(self, X):
         if self.use_uninformed_prior:
@@ -672,6 +673,25 @@ class BayesianGaussianMixture(_BaseBayesianGaussianMixture):
             UninformedPriorChecks._check_precision_parameters(self, X)
         else:
             super(BayesianGaussianMixture, self)._check_precision_parameters(X)
+
+    def _select_prior_checking(self):
+        """
+        Select the appropriate parameter checks for using informed or completely agnostic prior.
+
+        Parameters
+        ----------
+        uninformed: bool or str('mean') or str('precision')
+        """
+        from types import MethodType
+        uninformed = self.use_uninformed_prior
+        self._check_means_parameters = MethodType(UninformedPriorChecks._check_means_parameters
+                                                  if uninformed in [True, 'mean'] else
+                                                  BayesianGaussianMixture._check_means_parameters,
+                                                  self)
+        self._check_precision_parameters = MethodType(UninformedPriorChecks._check_precision_parameters
+                                                      if uninformed in [True, 'precision'] else
+                                                      BayesianGaussianMixture._check_precision_parameters,
+                                                      self)
 
     def _dispatch_weighted_log_prob(self, X):
         """Predict posterior probability of samples just like `_estimate_weighted_log_prob`
