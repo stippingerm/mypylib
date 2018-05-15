@@ -1274,16 +1274,6 @@ class BayesianFairTiedClassifier(BayesianGaussianClassifier):
         if covariance_type != 'tied':
             raise ValueError('Fair covariance estimation is needed only in the tied case.')
 
-    def fit(self, X, y):
-        classes_, self.counts_means_ = np.unique(y, return_counts=True)
-        self.counts_covar_ = self.counts_means_ / len(classes_)
-
-        # Delegate most of parameter checks
-        super(BayesianGaussianClassifier, self).fit(X, y)
-
-        if not np.all(self.classes_ == classes_):
-            raise ValueError('Implementation inconsistent, classes returned in different order')
-
     def _m_step(self, X, log_resp):
         """M step.
 
