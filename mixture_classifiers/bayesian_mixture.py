@@ -1036,6 +1036,36 @@ class BayesianGaussianMixture(_BaseBayesianGaussianMixture):
             self.degrees_of_freedom_, self.precisions_cholesky_,
             self.covariance_type)
 
+    def _estimate_wishart_tied(self, nk, xk, sk):
+        """Estimate the tied Wishart distribution parameters.
+
+        Parameters
+        ----------
+        X : array-like, shape (n_samples, n_features)
+
+        nk : array-like, shape (n_components,)
+
+        xk : array-like, shape (n_components, n_features)
+
+        sk : array-like, shape (n_features, n_features)
+        """
+        _, n_features = xk.shape
+
+        # Warning : in some Bishop book, there is a typo on the formula 10.63
+        # `degrees_of_freedom_k = degrees_of_freedom_0 + Nk`
+        # is the correct formula
+        self.degrees_of_freedom_ = (  # The library implementation seems to be wrong starting here: it divides by n_comp
+            self.degrees_of_freedom_prior_ + nk.sum())
+
+        diff = xk - self.mean_prior_
+        self.covariances_ = (
+            self.covariance_prior_ + sk * nk.sum() +
+            self.mean_precision_prior_ * np.dot(
+                (nk / self.mean_precision_) * diff.T, diff))
+
+        # Contrary to the original bishop book, we normalize the covariances
+        self.covariances_ /= self.degrees_of_freedom_
+
 
 class BayesianGaussianClassifier(MixtureClassifierMixin, BayesianGaussianMixture):
     """Gaussian Mixture.
