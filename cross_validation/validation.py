@@ -29,6 +29,12 @@ functions to validate the model.
 # all results for all possible hyperparameters are reported, the best is not
 # selected here.
 
+# Ref for nested cross-validation:
+# https://stats.stackexchange.com/questions/65128/nested-cross-validation-for-model-selection
+# https://sites.google.com/site/dtclabdcv/
+# https://www.researchgate.net/post/What_is_double_cross_validation
+# https://www.r-project.org/conferences/useR-2006/Abstracts/Francois+Langrognet.pdf
+
 from __future__ import print_function
 from __future__ import division
 
@@ -1335,8 +1341,12 @@ def _default_feaature_selection(n_feature):
     return [np.arange(n_feature)]
 
 
+def _first_of_dict(d):
+    return d[next(iter(d.keys()))]
+
+
 def cross_validate_iterator(estimator, X, y=None, groups=None, scoring=None, cv=None, X_for_test=None,
-                            feature_selection_generator=None, n_feature=0,  # generator=None, n_sample=0,
+                            feature_selection_generator=None, n_feature=0, how='product',
                             progress_bar=None, progress_params=None, n_jobs=1, verbose=0, fit_params=None,
                             pre_dispatch='2*n_jobs', return_train_score="warn", nested=False):
     """
@@ -1353,6 +1363,7 @@ def cross_validate_iterator(estimator, X, y=None, groups=None, scoring=None, cv=
     X_for_test: dict of any to array-like
     feature_selection_generator: callable
     n_feature: int, array-like
+    how: str('product')|str('zip')
     progress_bar: callable
     progress_params: dict
     n_jobs: int
@@ -1377,17 +1388,37 @@ def cross_validate_iterator(estimator, X, y=None, groups=None, scoring=None, cv=
     estimator, X, X_for_test = to_dict(estimator), to_dict(X), to_dict(X_for_test)
     n_feature = to_indexable(n_feature)
 
-    cv = check_cv(cv, y, classifier=is_classifier(estimator))
+    if type(y) is dict:
+        same_y = False
+        cv = check_cv(cv, _first_of_dict(y), classifier=is_classifier(estimator))
+    else:
+        same_y = True
+        cv = check_cv(cv, y, classifier=is_classifier(estimator))
     # scorers, _ = _check_multimetric_scoring(estimator, scoring=scoring)
 
-    if feature_selection_generator is None:
-        feature_selection_generator = _default_feaature_selection
-
-    conditions = (estimator.items(), X.items(), X_for_test.items(), n_feature)
-    total = np.product([len(x) for x in conditions])
+    if how=='product':
+        conditions = (estimator.items(), X.items(), X_for_test.items(), n_feature)
+        conditions_iterator = iter_product(*conditions)
+        total = np.product([len(x) for x in conditions])
+    else:
+        conditions = (estimator.items(), X.items(), n_feature)
+        conditions_iterator = ((est, (train_key, train), (train_key, X_for_test[train_key]), n_feat) for
+                               est, (train_key, train), n_feat in iter_product(*conditions))
+        total = np.product([len(x) for x in conditions])
 
     if progress_bar is None:
         progress_bar = _no_progress_bar
+
+    if feature_selection_generator is None:
+        feature_selection_generator = _default_feaature_selection
+        inner_progress_bar = _no_progress_bar
+    else:
+        def inner_progress_bar(arr, *args, **kwargs):
+            if len(arr) > 1:
+                return progress_bar(arr, *args, **kwargs)
+            else:
+                return arr
+
     progress_params = {**({} if progress_params is None else progress_params), 'total': total}
     cv_params = {'verbose': verbose, 'fit_params': fit_params, 'return_train_score': return_train_score}
 
@@ -1397,12 +1428,13 @@ def cross_validate_iterator(estimator, X, y=None, groups=None, scoring=None, cv=
 
     results = parallel(
         (delayed(_cross_validate_inner)(
-            est_key, train_key, test_key, feat, est, train, y, groups, scoring, cv, test, cv_params, nested))
+            est_key, train_key, test_key, feat, est, train, (y if same_y else y[train_key]),
+            groups, scoring, cv, test, cv_params, nested))
         for (est_key, est), (train_key, train), (test_key, test), n_feat in
-        progress_bar(iter_product(*conditions), **progress_params)
-        # no harm to convert to list, this is is going to be stored anyway
-        for feat in progress_bar(list(feature_selection_generator(train.shape[1] if n_feat == 0 else n_feat)),
-                                 desc='Feat', leave=False))
+        progress_bar(conditions_iterator, **progress_params)
+        # no harm to convert to list, this is is going to be stored in memory  anyway
+        for feat in inner_progress_bar(list(feature_selection_generator(train.shape[1] if n_feat == 0 else n_feat)),
+                                       desc='Feat', leave=False))
 
     keys = ['estimator', 'train', 'test', 'n_feature', 'feature', 'scores']
     results = {k: np.asarray(v) for k, v in zip(keys, zip(*results))}
