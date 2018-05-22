@@ -20,6 +20,7 @@ from sklearn.utils.validation import check_is_fitted
 from sklearn.mixture.base import _check_X
 # classifiers
 
+from sklearn.model_selection import StratifiedKFold
 from .base import MixtureClassifierMixin
 
 
@@ -100,7 +101,13 @@ def _estimate_fair_gaussian_parameters(X, resp, reg_covar, covariance_type, rand
     means = np.dot(resp.T, X) / nk[:, np.newaxis]
     # Subsample data to be comparable with "full" that has fewer data per component
     n_samples, n_components = resp.shape
-    select = random_state.choice(n_samples, int(n_samples / n_components), replace=False)
+    uni = np.unique(resp)
+    if uni.shape == (2,) and np.all(uni == [0, 1]):
+        labels_ = [hash(tuple(x)) for x in resp]
+        skf = StratifiedKFold(n_splits=n_components, shuffle=True, random_state=random_state)
+        _, select = next(skf.split(X, labels_))
+    else:
+        select = random_state.choice(n_samples, int(n_samples / n_components), replace=False)
     X_fair = X[select, :]
     resp_fair = resp[select, :]
     nk_fair = resp_fair.sum(axis=0) + 10 * np.finfo(resp.dtype).eps
