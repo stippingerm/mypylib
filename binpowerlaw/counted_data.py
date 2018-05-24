@@ -4,7 +4,7 @@
 #
 
 ###   Notes:
-# The implementation is mostly based on the pulication
+# The implementation is mostly based on the publication
 #   Clauset, A., Shalizi, C. R., & Newman, M. E. J. (2009). Power-law distributions in empirical data.
 #   Society for Industrial and Applied Mathematics, 51(4), 661–703. https://doi.org/10.1137/070710111
 # This submodule is intended to provide functionality and performance improvement over the python package
@@ -14,28 +14,43 @@ import numpy as np
 from scipy.stats import pareto, multinomial
 from .base import progress_bar, truncated_pareto, \
     edges_from_geometric_centers as make_grid, \
-    aggregate_counts, make_search_grid, \
+    aggregate_counts, make_search_grid, _adaptive_xmin_xmax_ks as adaptive_search, \
     gen_surrogate_counts as _surrogate, _work_axis
 
 
-def _check_points_counts(points, counts, flatten=False, sort=False):
+def _check_points_counts(points, counts, flatten=False, sort=False, min_range=None):
     """
     :param points: observed values, shape (n,)
     :param counts: number of occurrences for `points`, shape (n,)
     """
     points = np.atleast_1d(points)
     counts = np.atleast_1d(counts)
-    if points.shape != counts.shape:
-        raise ValueError('points and counts must have the same shape')
     if flatten:
         points = np.ravel(points)
         counts = np.ravel(counts)
-    if sort and np.any(np.diff(points, axis=_work_axis) < 0):
+    if len(counts) < 2:
+        raise ValueError('at east two counts are requred for reasonable calculation, got'
+                         'points="%s", counts="%s"'%(points,counts))
+    if points.shape != counts.shape:
+        raise ValueError('points and counts must have the same shape')
+    input_ordering = np.unique(np.sign(np.diff(points, axis=_work_axis)))
+    if 0 in input_ordering:
+        raise ValueError('duplicate entry for points')
+    if sort:
         # sort if not increasing
-        idx = np.argsort(points, axis=_work_axis)
-        # TODO: use [ [[0],[1],[2], ...], idx ] for sorting if 2d, etc.
-        points = points[idx]
-        counts = counts[idx]
+        if len(input_ordering) == 1:
+            input_ordering = int(input_ordering)
+            points = points[::input_ordering]
+            counts = counts[::input_ordering]
+        else:
+            idx = np.argsort(points, axis=_work_axis)
+            # TODO: in the 2d case, use advance indexing, (e.g., [ [[0],[1],[2], ...], idx ]) for sorting
+            points = points[idx]
+            counts = counts[idx]
+    if min_range is not None:
+        low, high = np.min(points), np.max(points)
+        if low * min_range > high:
+            raise ValueError('edges span smaller interval than the entire range')
     return points, counts
 
 
@@ -100,7 +115,8 @@ def KS_test(points, counts, alpha, xmin, xmax=np.inf):
     return np.max(ks) if len(ks) else np.inf
 
 
-def find_xmin_xmax_ks(points, counts, grid=None, scaling_range=10, max_range=np.inf, req_samples=100,
+def find_xmin_xmax_ks(points, counts, grid=None, scaling_range=10, max_range=np.inf,
+                      clip_low=np.inf, clip_high=0, req_samples=100,
                       no_xmax=True, ranking=False):
     """
     Find the best scaling interval, exponent and the Kolmogorov-Smirnov distance which measures the fit quality.
@@ -112,7 +128,7 @@ def find_xmin_xmax_ks(points, counts, grid=None, scaling_range=10, max_range=np.
     :param no_xmax: assume that xmax=np.inf, bool
     :return xmin, xmax, ahat, ks:
     """
-    points, counts = _check_points_counts(points, counts)
+    points, counts = _check_points_counts(points, counts, min_range=scaling_range)
     if grid is None:
         grid, grid_counts = points, counts
         n_cum = np.cumsum(grid_counts)
@@ -121,12 +137,19 @@ def find_xmin_xmax_ks(points, counts, grid=None, scaling_range=10, max_range=np.
         n_cum = np.concatenate(([0], np.cumsum(grid_counts)))
     assert len(grid) == len(n_cum)
 
-    low, high, n_low, n_high = make_search_grid(grid, n_cum, no_xmax, scaling_range, max_range, req_samples)
+    low, high, n_low, n_high = make_search_grid(grid, n_cum, no_xmax, scaling_range, max_range,
+                                                clip_low, clip_high, req_samples=req_samples)
 
     alpha_est = np.array([hill_estimator(points, counts, xmin, xmax) for xmin, xmax in zip(low, high)])
     ks = np.array([KS_test(points, counts, ahat, xmin, xmax) for ahat, xmin, xmax in zip(alpha_est, low, high)])
     which = np.argsort(ks) if ranking else np.nanargmin(ks)
     return alpha_est[which], low[which], high[which], ks[which]
+
+
+def adaptive_xmin_xmax_ks(edges, counts, *args, **kwargs):
+    edges, counts = _check_points_counts(edges, counts)
+    # _adaptive_xmin_xmax_ks(fun, edges, *args, n_work, method='twopass', debug=False, **kwargs)
+    return adaptive_search(find_xmin_xmax_ks, edges, counts, *args, **kwargs)
 
 
 def point_based_goodness(points, counts, alpha, xmin, xmax=np.inf, n_iter=1000, grid=None, debug=False, **kwargs):

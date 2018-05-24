@@ -20,6 +20,9 @@ except ModuleNotFoundError:
     progress_bar = _identity
 
 
+# In the scipy.pareto implementation the scale parameter plays the role of xmin while
+# loc has no standard interpretation.
+
 class truncated_pareto_gen(rv_continuous):
     """Truncated power-law distribution, see scipy.stats.pareto too"""
 
@@ -106,7 +109,8 @@ def aggregate_counts(points, counts, bins, right=False):
     return agg_counts['counts'].values, bins
 
 
-def make_search_grid(edges, n_cum, no_xmax, scaling_range=1, max_range=np.inf, req_samples=0):
+def make_search_grid(edges, n_cum, no_xmax, scaling_range=1, max_range=np.inf,
+                     clip_low=np.inf, clip_high=0, req_samples=0):
     if no_xmax:
         low, high = np.meshgrid(edges, np.inf)
         n_low, n_high = np.meshgrid(n_cum, n_cum[-1])
@@ -116,11 +120,20 @@ def make_search_grid(edges, n_cum, no_xmax, scaling_range=1, max_range=np.inf, r
     low, high = low.ravel(), high.ravel()
     n_low, n_high = n_low.ravel(), n_high.ravel()
 
-    acceptable = (low * scaling_range <= high) & (low * max_range >= high) & (req_samples < n_high - n_low)
+    acceptable = (low * scaling_range <= high) & (low * max_range >= high) & (
+        low <= clip_low) & (high >= clip_high) & (req_samples < n_high - n_low)
+    if np.sum(acceptable.astype(int)) == 0:
+        raise ValueError('Empty search grid.')
     return low[acceptable], high[acceptable], n_low[acceptable], n_high[acceptable]
 
 
 def _suggest_stepsizes(largest, method):
+    """
+    Suggest stepsizes for successive approximation of the result if exact solution is not feasible.
+    :param largest: largest step to perform
+    :param method: single for one-way no repetition, double for one-way but repeat each size, twopass for swipe
+    :return: array of step sizes in the order they should be performed
+    """
     log_largest = np.ceil(np.log2(largest)).astype(int)
     path = np.logspace(log_largest, 0, log_largest + 1, base=2.0).astype(int)
     relax = np.array([1, 1])
@@ -146,7 +159,7 @@ def _stable_unique(arr, limit=None):
     return arr[np.sort(idx)[:limit]]
 
 
-def adaptive_xmin_xmax_ks(fun, edges, *args, n_work, method='twopass', debug=False, **kwargs):
+def _adaptive_xmin_xmax_ks(fun, edges, *args, n_work, method='twopass', debug=False, **kwargs):
     """
     Do a non-exhaustive grid search assuming that close values yield similar results.
     :param fun:

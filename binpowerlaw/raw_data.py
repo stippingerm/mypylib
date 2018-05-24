@@ -4,7 +4,7 @@
 #
 
 ###   Notes:
-# The implementation is mostly based on the pulication
+# The implementation is mostly based on the publication
 #   Clauset, A., Shalizi, C. R., & Newman, M. E. J. (2009). Power-law distributions in empirical data.
 #   Society for Industrial and Applied Mathematics, 51(4), 661–703. https://doi.org/10.1137/070710111
 # The functionality of this submodule can be found in the python package `powerlaw` too.
@@ -23,9 +23,14 @@ def _check_data(data, flatten=False, sort=False):
     data = np.atleast_1d(data)
     if flatten:
         data = np.ravel(data)
-    if sort and not np.any(np.diff(data, axis=_work_axis) < 0):
+    input_ordering = np.unique(np.sign(np.diff(data, axis=_work_axis)))
+    if sort:
         # sort if not increasing
-        data = np.sort(data, axis=_work_axis)
+        if len(input_ordering) == 1:
+            input_ordering = int(input_ordering)
+            data = data[::input_ordering]
+        else:
+            data = np.sort(data, axis=_work_axis)
     return data
 
 
@@ -86,7 +91,8 @@ def KS_test(data, alpha, xmin, xmax=np.inf):
     return np.max(ks) if len(ks) else np.inf
 
 
-def find_xmin_xmax_ks(data, grid=None, scaling_range=10, max_range=np.inf, req_samples=100,
+def find_xmin_xmax_ks(data, grid=None, scaling_range=10, max_range=np.inf,
+                      clip_low=np.inf, clip_high=0, req_samples=100,
                       no_xmax=True, ranking=False):
     """
     Find the best scaling interval, exponent and the Kolmogorov-Smirnov distance which measures the fit quality.
@@ -102,7 +108,8 @@ def find_xmin_xmax_ks(data, grid=None, scaling_range=10, max_range=np.inf, req_s
     counts = np.histogram(data, grid)
     n_cum = np.concatenate(([0], np.cumsum(counts)))
 
-    low, high, n_low, n_high = make_search_grid(grid, n_cum, no_xmax, scaling_range, max_range, req_samples)
+    low, high, n_low, n_high = make_search_grid(grid, n_cum, no_xmax, scaling_range, max_range,
+                                                clip_low, clip_high, req_samples=req_samples)
 
     alpha_est = np.array([hill_estimator(data, xmin, xmax) for xmin, xmax in zip(low, high)])
     ks = np.array([KS_test(data, ahat, xmin, xmax) for ahat, xmin, xmax in zip(alpha_est, low, high)])
