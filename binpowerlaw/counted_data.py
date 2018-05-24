@@ -73,7 +73,7 @@ def log_likelihood(points, counts, alpha, xmin, xmax=np.inf):
     points, counts = _check_points_counts(points, counts)
     # Out of range must result in logpdf returning ll == -np.inf
     if xmax == np.inf:
-        ll = pareto.logpdf(points, alpha, scale=xmin)
+        ll = pareto.logpdf(points, alpha - 1, scale=xmin)
     else:
         ll = truncated_pareto.logpdf(points, alpha - 1, float(xmax) / xmin, scale=xmin)
     return np.sum(ll * counts, axis=_work_axis)

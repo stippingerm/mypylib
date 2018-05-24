@@ -70,9 +70,12 @@ def _log_likelihood(lefts, widths, counts, xmin, xmax, alpha):
     :param xmax: the lower cutoff of the power-law
     :param alpha: exponent, float
     """
+    # accounted_wieght = pareto.cdf(xmax, scale=xmin)
+    log_accounted_wieght = np.log1p(-pareto.sf(xmax, alpha-1, scale=xmin))
     # I believe this formulation is less prone to errors than using pareto.cdf
-    ll = (np.sum(counts * np.log(1 - np.power(widths, -(alpha - 1)))) -
-          (alpha - 1) * np.sum(counts * (np.log(lefts) - np.log(xmin))))
+    ll = (- np.sum(counts) * log_accounted_wieght
+          + np.sum(counts * np.log1p(-np.power(widths, -(alpha - 1))))
+          - (alpha - 1) * np.sum(counts * (np.log(lefts) - np.log(xmin))))
     return ll
 
 
@@ -93,9 +96,7 @@ def log_likelihood(edges, counts, xmin, xmax, alpha):
         # TODO: broadcasting would be difficult
         ll = -np.inf
     else:
-        # I believe this formulation is less prone to errors than using pareto.cdf
-        ll = (np.sum(counts * np.log(1 - np.power(widths, -(alpha - 1)))) -
-              (alpha - 1) * np.sum(counts * (np.log(lefts) - np.log(xmin))))
+        ll = _log_likelihood(lefts, widths, counts, xmin, xmax, alpha)
     return ll
 
 

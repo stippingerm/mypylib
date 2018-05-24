@@ -50,7 +50,7 @@ def log_likelihood(data, alpha, xmin, xmax=np.inf):
     """
     data = _check_data(data)
     if xmax == np.inf:
-        ll = pareto.logpdf(data, alpha, scale=xmin)
+        ll = pareto.logpdf(data, alpha - 1, scale=xmin)
     else:
         ll = truncated_pareto.logpdf(data, alpha - 1, float(xmax) / xmin, scale=xmin)
     return np.sum(ll)
