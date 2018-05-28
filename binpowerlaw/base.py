@@ -249,3 +249,84 @@ def gen_surrogate_counts(n_point, p_cat, p_low, p_high, alpha, xmin, xmax, bins)
         counts[len(bins) - len(p_high):len(bins)] = multinomial.rvs(s_low, p_high)
 
     return counts
+
+# Make a section x0<x<x1 of cdf F having f0 = F(x0), f1 = F(x1)
+# correspond to p0 = F~(x0), p1 = F~(x1) for x0<x<x1 by linear transformation.
+# p0 = s * f0 + d
+# p1 = s * f1 + d
+# ----------------
+# p0 - p1 = s (f0 - f1) --> s = (p0-p1)/(f0-f1)
+# d = p0 - s * f0
+def _solve_cdf_parts(p0, p1, f0, f1):
+    s = float(p0 - p1) / (f0 - f1)
+    d = p0 - s * f0
+    return s, d
+
+
+def exp_cutoff_sampler(exponent, xmin, xmax=np.inf, low_cut=0, discrete=False):
+    # f1(x) = C1 * exp( -alpha * ( x/x_min - 1 ) ) = D1 * lambda_low * exp ( -lambda_low * (x-x1) )
+    # f2(x) = C2 * ( x / x_min ) ^ (-alpha)
+    # f3(x) = C3 * exp( -alpha * ( x/x_max - 1 ) ) = D3 * lambda_high * exp ( -lambda_high * (x-x3) )
+    # f1(x_min)=f2(x_min)   --> C1 = C2,  D1 = C2 / lambda_low
+    # f1'(x_min)=f2'(x_min) --> x1
+    # f2(x_max)=f3(x_max)   --> C2 * (x_max/x_min) ^ (-alpha) = C3,  D3 = C2 * (x_max/x_min) ^ (-alpha) / lambda_high
+    # f2'(x_min)=f3'(x_min) --> - alpha * C2 / x_min * (x_max/x_min) ^ (-alpha-1) = - C3 * alpha / x_max  -->  x3
+    # lambda_low = alpha / x_min,  x1 = x_min / alpha
+    # lambda_high = alpha / x_max,  x3 = x_max / alpha
+    truncated = xmax != np.inf
+    if discrete:
+        raise NotImplementedError
+        from scipy.stats import poisson
+        base_class = rv_discrete
+        low_regime = poisson(exponent)
+        high_regime = poisson(exponent)
+        if truncated:
+            scaling_regime = genzipf(exponent, xmin)
+            p_high = high_regime.pmf(xmax) / scaling_regime(xmax - 1)
+        else:
+            scaling_regime = truncated_zipf(exponent, xmin, xmax)
+            p_high = 0
+        p_low = low_regime.pmf(xmin) / scaling_regime(xmin)
+
+    else:
+        from scipy.stats import expon
+        base_class = rv_continuous
+
+        scale_low = float(xmin) / exponent  # 1 / lambda
+        low_regime = expon(loc=low_cut, scale=scale_low)
+
+        scaling_regime = pareto(exponent - 1, scale=xmin)
+
+        scale_high = float(xmax) / exponent  # 1 / lambda
+        high_regime = expon(loc=xmax, scale=scale_high)
+
+        # The first term compensates for the rescaling of cdf
+        p_low = low_regime.cdf(xmin) * scaling_regime.pdf(xmin) / low_regime.pdf(xmin)
+        p_mid = scaling_regime.cdf(xmax)
+        if truncated:
+            # We get scaling_regime = pareto(exponent - 1, float(xmax) / xmin, scale=xmin) after rescaling
+            p_high = high_regime.sf(xmax) * scaling_regime.pdf(xmax) / high_regime.pdf(xmax)
+        else:
+            p_high = 0.0
+
+    weights = np.array([p_low, p_mid, p_high])
+    p_low, p_mid, p_high = weights / np.sum(weights)
+
+    s_low, d_low = _solve_cdf_parts(0, p_low, 0, low_regime.cdf(xmin))
+    s_mid, d_mid = _solve_cdf_parts(p_low, p_low + p_mid, 0, scaling_regime.cdf(xmax))
+    s_high, d_high = _solve_cdf_parts(p_low + p_mid, 1, high_regime.cdf(xmax), 1)
+
+    class my_distribution(base_class):
+        def _cdf(self, x):
+            return np.select([x < xmin, x <= xmax, x > xmax],
+                             [d_low + low_regime.cdf(x) * s_low, d_mid + scaling_regime.cdf(x) * s_mid,
+                              d_high + high_regime.cdf(x) * s_high])
+
+        def _ppf(self, q):
+            return np.select([q < p_low, q <= p_low + p_mid, q > p_low + p_mid],
+                             [low_regime.ppf((q - d_low) / s_low), scaling_regime.ppf((q - d_mid) / s_mid),
+                              high_regime.ppf((q - d_high) / s_high)])
+
+    my_rv = my_distribution(a=low_cut, name='synthetic')
+    my_rv.weight_distribution = p_low, p_mid, p_high
+    return my_rv
