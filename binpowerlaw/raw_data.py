@@ -136,11 +136,15 @@ def goodness_of_fit(data, alpha, xmin, xmax=np.inf, n_iter=1000, grid=None, debu
     :return p: p-value
     """
 
-    def gen_surrogate_ks(n_point, p_cat, low, high, alpha, xmin, xmax, grid):
-        sample = _surrogate(n_point, p_cat, low, high, alpha, xmin, xmax)
-        counts, _ = np.histogram(sample, grid)
-        _xmin, _xmax, _ahat, _ks = find_xmin_xmax_ks(grid, sample, no_xmax=(xmax == np.inf))
+    def gen_surrogate_ks():
+        _sample = _surrogate(n_point, p_cat, low, high, alpha, xmin, xmax, random_state=random_state)
+        _xmin, _xmax, _ahat, _ks = find_xmin_xmax_ks(_sample, grid, no_xmax=no_xmax, **kwargs)
         return _ks
+
+    data = _check_data(data)
+    random_state = check_random_state(random_state)
+    alpha = float(alpha)
+    no_xmax = (xmax == np.inf)
 
     n_point = len(data)
     low, mid, high = data[data < xmin], data[(xmin <= data) & (data < xmax)], data[xmax <= data]

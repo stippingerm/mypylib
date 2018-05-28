@@ -194,12 +194,16 @@ def point_based_goodness(points, counts, alpha, xmin, xmax=np.inf, n_iter=1000, 
     :return p: p-value
     """
 
-    def gen_surrogate_ks(n_point, p_cat, p_low, p_high, alpha, xmin, xmax, grid):
-        counts = _surrogate(n_point, p_cat, p_low, p_high, alpha, xmin, xmax, grid)
-        _xmin, _xmax, _ahat, _ks = find_xmin_xmax_ks(grid, counts, no_xmax=(xmax == np.inf), **kwargs)
+    def gen_surrogate_ks():
+        _counts = _surrogate(n_point, p_cat, p_low, p_high, alpha, xmin, xmax, grid, random_state=random_state)
+        _xmin, _xmax, _ahat, _ks = find_xmin_xmax_ks(grid, _counts, no_xmax=no_xmax, **kwargs)
         return _ks
 
     points, counts = _check_points_counts(points, counts)
+    random_state = check_random_state(random_state)
+    alpha = float(alpha)
+    no_xmax = (xmax == np.inf)
+
     n_point = np.sum(counts)
     c_low, c_mid, c_high = counts[points < xmin], counts[(xmin <= points) & (points < xmax)], counts[xmax <= points]
     p_cat = np.array([np.sum(c_low), np.sum(c_mid), np.sum(c_high)]) / float(n_point)

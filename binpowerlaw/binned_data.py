@@ -70,8 +70,8 @@ def _log_likelihood(lefts, widths, counts, xmin, xmax, alpha):
     :param xmax: the lower cutoff of the power-law
     :param alpha: exponent, float
     """
-    log_accounted_wieght = np.log1p(-pareto.sf(xmax, alpha-1, scale=xmin))
     # accounted_weight = pareto.cdf(xmax, scale=xmin) if xmax<np.inf else 1
+    log_accounted_weight = np.log1p(-pareto.sf(xmax, alpha-1, scale=xmin))
     # I believe this formulation is less prone to errors than using pareto.cdf
     ll = (- np.sum(counts) * log_accounted_weight
           + np.sum(counts * np.log1p(-np.power(widths, -(alpha - 1))))
@@ -198,12 +198,16 @@ def goodness_of_fit(edges, counts, alpha, xmin, xmax=np.inf, n_iter=1000, grid=N
     :return p: p-value
     """
 
-    def gen_surrogate_data(n_point, p_cat, p_low, p_high, alpha, xmin, xmax, bins):
-        counts = _surrogate(n_point, p_cat, p_low, p_high, alpha, xmin, xmax, bins)
-        _xmin, _xmax, _ahat, _ks = find_xmin_xmax_ks(bins, counts, no_xmax=(xmax == np.inf), **kwargs)
+    def gen_surrogate_data():
+        _counts = _surrogate(n_point, p_cat, p_low, p_high, alpha, xmin, xmax, grid, random_state=random_state)
+        _xmin, _xmax, _ahat, _ks = find_xmin_xmax_ks(grid, _counts, no_xmax=no_xmax, **kwargs)
         return _ks
 
     edges, counts = _check_bins_counts(edges, counts)
+    random_state = check_random_state(random_state)
+    alpha = float(alpha)
+    no_xmax = (xmax == np.inf)
+
     n_point = np.sum(counts)
     lefts, widths, use_data, use_edge = _trf_check_bounds(edges, counts, xmin, xmax)
     rights = edges[1:]

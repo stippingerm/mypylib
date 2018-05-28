@@ -45,6 +45,72 @@ class truncated_pareto_gen(rv_continuous):
 truncated_pareto = truncated_pareto_gen(a=1.0, name="truncated_pareto")
 
 
+# The scipy.stats.zipf distribution implements the discrete version for xmin=1.
+# Note that the scale and loc parameters do not fit the purpose of xmin!=1.
+# Here s is for lower (included) and m for upper (excluded) bound.
+# Generating samples for exponent b<2 is very tedious, advanced method needs to be implemented.
+# For advanced rvs ideas see Section D and Ref. [46] within
+#   Clauset, A., Shalizi, C. R., & Newman, M. E. J. (2009). Power-law distributions in empirical data.
+#   Society for Industrial and Applied Mathematics, 51(4), 661–703. https://doi.org/10.1137/070710111
+
+class genzipf_gen(rv_discrete):
+    """Generalized Zipf (discrete power-law) distribution, see scipy.stats.zipf too"""
+
+    def _cdf(self, x, b, s):
+        return 1.0 - np.clip(zeta(b, x + 1) / zeta(b, s), None, 1)
+
+    def _logcdf(self, x, b, s):
+        return np.log1p(-np.clip(zeta(b, x + 1) / zeta(b, s), None, 1))
+
+    def _pmf(self, x, b, s):
+        return np.select([s <= x], [np.power(x, np.asarray(-b, dtype=float)) / zeta(b, s)], 0)
+
+    def _logpmf(self, x, b, s):
+        return np.select([s <= x], [-b * np.log(x) - np.log(zeta(b, s))], -np.inf)
+
+
+genzipf = genzipf_gen(a=1.0, name="genzipf")
+
+
+class truncated_zipf_gen(rv_discrete):
+    """Truncated Zipf (discrete power-law) distribution, see scipy.stats.zipf too"""
+
+    def _cdf(self, x, b, s, m):
+        return 1.0 - np.clip((zeta(b, x + 1) - zeta(b, m)) / (zeta(b, s) - zeta(b, m)), 0, 1)
+
+    def _logcdf(self, x, b, s, m):
+        return np.log1p(-np.clip((zeta(b, x + 1) - zeta(b, m)) / (zeta(b, s) - zeta(b, m)), 0, 1))
+
+    def _pmf(self, x, b, s, m):
+        return np.select([(s <= x) & (x < m)], [np.power(x, np.asarray(-b, dtype=float)) / (zeta(b, s) - zeta(b, m))],
+                         0)
+
+    def _logpmf(self, x, b, s, m):
+        return np.select([(s <= x) & (x < m)], [-b * np.log(x) - np.log(zeta(b, s) - zeta(b, m))], -np.inf)
+
+
+truncated_zipf = truncated_zipf_gen(a=1.0, name="truncated_zipf")
+
+
+# copy-pasted from scikit-learn utils/validation.py
+def check_random_state(seed):
+    """Turn seed into a np.random.RandomState instance
+    If seed is None (or np.random), return the RandomState singleton used
+    by np.random.
+    If seed is an int, return a new RandomState instance seeded with seed.
+    If seed is already a RandomState instance, return it.
+    Otherwise raise ValueError.
+    """
+    if seed is None or seed is np.random:
+        return np.random.mtrand._rand
+    if isinstance(seed, (numbers.Integral, np.integer)):
+        return np.random.RandomState(seed)
+    if isinstance(seed, np.random.RandomState):
+        return seed
+    raise ValueError('%r cannot be used to seed a numpy.random.RandomState'
+                     ' instance' % seed)
+
+
 def edges_from_geometric_centers(centers):
     data = np.atleast_1d(centers)
     if len(data) > 2:
@@ -201,7 +267,7 @@ def _adaptive_xmin_xmax_ks(fun, edges, *args, n_work, method='twopass', debug=Fa
     return fun(edges, *args, grid=work_edges, **kwargs, ranking=ranking)
 
 
-def gen_surrogate_data(n_point, p_cat, low, high, alpha, xmin, xmax):
+def gen_surrogate_data(n_point, p_cat, low, high, alpha, xmin, xmax, random_state):
     """
     Generate surrogate data points
     :param n_point: total number of data points
@@ -211,22 +277,26 @@ def gen_surrogate_data(n_point, p_cat, low, high, alpha, xmin, xmax):
     :param xmin, xmax: boundaries of the `pareto` regime, so that all(low<xmin) and all (xmax<=high)
     :return: surrogate sample
     """
-    s_low, s_mid, s_high = multinomial.rvs(n_point, p_cat)
-    sample = np.zeros(n_point, dtype=float)
+    random_state = check_random_state(random_state)
+    s_low, s_mid, s_high = multinomial.rvs(n_point, p_cat, random_state=random_state)
+    sample = np.empty(n_point, dtype=float)
     if s_low:
-        sample[0:s_low] = np.random.choice(low, s_low, replace=True)
+        sample[0:s_low] = random_state.choice(low, s_low, replace=True)
     if s_high:
-        sample[s_low + s_mid:n_point] = np.random.choice(high, s_high, replace=True)
+        sample[s_low + s_mid:n_point] = random_state.choice(high, s_high, replace=True)
 
     if xmax == np.inf:
-        sample[s_low:s_low + s_mid] = pareto.rvs(alpha, scale=xmin, size=s_mid)
+        sample[s_low:s_low + s_mid] = pareto.rvs(alpha, scale=xmin, size=s_mid, random_state=random_state)
     else:
         sample[s_low:s_low + s_mid] = truncated_pareto.rvs(alpha, xmax / float(xmin), scale=xmin, size=s_mid)
+        sample[s_low:s_low + s_mid] = truncated_pareto.rvs(alpha, xmax / float(xmin), scale=xmin, size=s_mid,
+                                                           random_state=random_state)
 
+    random_state.shuffle(sample)
     return sample
 
 
-def gen_surrogate_counts(n_point, p_cat, p_low, p_high, alpha, xmin, xmax, bins):
+def gen_surrogate_counts(n_point, p_cat, p_low, p_high, alpha, xmin, xmax, bins, random_state):
     """
     Generate surrogate hit counts
     :param n_point: total number of data points
@@ -236,19 +306,28 @@ def gen_surrogate_counts(n_point, p_cat, p_low, p_high, alpha, xmin, xmax, bins)
     :param xmin, xmax: boundaries of the `pareto` regime, so that all(low<xmin) and all (xmax<=high)
     :return: surrogate hit counts
     """
-    s_low, s_mid, s_high = multinomial.rvs(n_point, p_cat)
+    random_state = check_random_state(random_state)
+    s_low, s_mid, s_high = multinomial.rvs(n_point, p_cat, random_state=random_state)
     if xmax == np.inf:
-        sample = pareto.rvs(alpha, scale=xmin, size=s_mid)
+        sample = pareto.rvs(alpha, scale=xmin, size=s_mid, random_state=random_state)
     else:
-        sample = truncated_pareto.rvs(alpha, xmax / float(xmin), scale=xmin, size=s_mid)
+        sample = truncated_pareto.rvs(alpha, xmax / float(xmin), scale=xmin, size=s_mid, random_state=random_state)
 
     counts, _ = np.histogram(sample, bins)
     if s_low:
-        counts[0:len(p_low)] = multinomial.rvs(s_low, p_low)
+        counts[0:len(p_low)] = multinomial.rvs(s_low, p_low, random_state=random_state)
     if s_high:
-        counts[len(bins) - len(p_high):len(bins)] = multinomial.rvs(s_low, p_high)
+        counts[len(counts) - len(p_high):len(counts)] = multinomial.rvs(s_low, p_high, random_state=random_state)
 
     return counts
+
+
+def p_value_from_ks(ks_collection, ks_data, debug=False):
+    ks_collection = np.sort(ks_collection)
+    p = 1 - np.searchsorted(ks_collection, ks_data) / float(len(ks_collection))
+    if debug:
+        print(ks_collection, ks_data)
+    return p
 
 # Make a section x0<x<x1 of cdf F having f0 = F(x0), f1 = F(x1)
 # correspond to p0 = F~(x0), p1 = F~(x1) for x0<x<x1 by linear transformation.
