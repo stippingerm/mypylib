@@ -67,7 +67,7 @@ def hill_estimator(data, xmin, xmax=np.inf):
     data = _check_data(data)
     data, use_data = _trf_check_bounds(data, xmin, xmax)
     powered = np.log(data) - np.log(xmin)
-    alpha = 1 + np.sum(use_data) / np.sum(powered[use_data])
+    alpha = 1 + np.sum(use_data.astype(int)) / np.sum(powered[use_data])
     return alpha
 
 
@@ -85,7 +85,7 @@ def KS_test(data, alpha, xmin, xmax=np.inf):
         cdf = pareto.cdf(data[use_data], alpha - 1, scale=xmin)
     else:
         cdf = truncated_pareto.cdf(data[use_data], alpha - 1, float(xmax) / xmin, scale=xmin)
-    n = np.sum(use_data)
+    n = np.sum(use_data.astype(int))
     emp1 = np.arange(n) / float(n)
     emp2 = np.arange(1, n + 1) / float(n)
     ks = np.maximum(np.abs(emp1 - cdf), np.abs(emp2 - cdf))

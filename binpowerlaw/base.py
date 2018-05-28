@@ -5,7 +5,9 @@
 
 import numpy as np
 import pandas as pd
-from scipy.stats import rv_continuous, multinomial, pareto
+from scipy.stats import rv_continuous, rv_discrete, multinomial, pareto
+from scipy.special import zeta
+import numbers
 
 _work_axis = -1
 
@@ -20,17 +22,17 @@ except ModuleNotFoundError:
     progress_bar = _identity
 
 
-# In the scipy.pareto implementation the scale parameter plays the role of xmin while
+# In the scipy.stats.pareto implementation the scale parameter plays the role of xmin while
 # loc has no standard interpretation.
 
 class truncated_pareto_gen(rv_continuous):
     """Truncated power-law distribution, see scipy.stats.pareto too"""
 
     def _cdf(self, x, b, m):
-        return pareto.cdf(x, b) / pareto.cdf(m, b)
+        return np.clip(pareto.cdf(x, b) / pareto.cdf(m, b), None, 1)
 
     def _logcdf(self, x, b, m):
-        return pareto.logcdf(x, b) - pareto.logcdf(m, b)
+        return np.clip(pareto.logcdf(x, b) - pareto.logcdf(m, b), None, 0)
 
     def _ppf(self, q, b, m):
         return np.power(1.0 - q * pareto.cdf(m, b), -1.0 / b)
@@ -187,7 +189,7 @@ def make_search_grid(edges, n_cum, no_xmax, scaling_range=1, max_range=np.inf,
     n_low, n_high = n_low.ravel(), n_high.ravel()
 
     acceptable = (low * scaling_range <= high) & (low * max_range >= high) & (
-        low <= clip_low) & (high >= clip_high) & (req_samples < n_high - n_low)
+            low <= clip_low) & (high >= clip_high) & (req_samples < n_high - n_low)
     if np.sum(acceptable.astype(int)) == 0:
         raise ValueError('Empty search grid.')
     return low[acceptable], high[acceptable], n_low[acceptable], n_high[acceptable]
@@ -252,9 +254,9 @@ def _adaptive_xmin_xmax_ks(fun, edges, *args, n_work, method='twopass', debug=Fa
         best_edges = _stable_unique(list(zip(low, high)), n_work)
         best_idx = df_edge_to_idx[best_edges].values
         if debug:
-            if ks.size>0:
+            if ks.size > 0:
                 print('+++ %10d%10f%10d' % (step, ks[:1], len(alpha)))
-                print('l', df_edge_to_idx[low].values, 'h', df_edge_to_idx[high].values, 'b', best_idx,)
+                print('l', df_edge_to_idx[low].values, 'h', df_edge_to_idx[high].values, 'b', best_idx, )
             else:
                 print('--- %10d%10s%10d' % (step, 'empty', len(alpha)))
                 raise ValueError('Empty result set, probably some of the grid conditions are not met '
@@ -288,7 +290,6 @@ def gen_surrogate_data(n_point, p_cat, low, high, alpha, xmin, xmax, random_stat
     if xmax == np.inf:
         sample[s_low:s_low + s_mid] = pareto.rvs(alpha, scale=xmin, size=s_mid, random_state=random_state)
     else:
-        sample[s_low:s_low + s_mid] = truncated_pareto.rvs(alpha, xmax / float(xmin), scale=xmin, size=s_mid)
         sample[s_low:s_low + s_mid] = truncated_pareto.rvs(alpha, xmax / float(xmin), scale=xmin, size=s_mid,
                                                            random_state=random_state)
 
