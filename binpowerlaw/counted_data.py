@@ -15,7 +15,7 @@ from scipy.stats import pareto, multinomial
 from .base import progress_bar, truncated_pareto, \
     edges_from_geometric_centers as make_grid, \
     aggregate_counts, make_search_grid, _adaptive_xmin_xmax_ks as adaptive_search, \
-    gen_surrogate_counts as _surrogate, _work_axis
+    gen_surrogate_counts as _surrogate, _work_axis, check_random_state, p_value_from_ks
 
 
 def _check_points_counts(points, counts, flatten=False, sort=False, min_range=None):
@@ -60,10 +60,31 @@ def _trf_check_bounds(points, counts, xmin, xmax):
     return points, use_data
 
 
+def _log_likelihood(points, counts, xmin, xmax, alpha):
+    """
+    Give the likelihood of binned data assuming the distribution parameters.
+    This can be seen as a naive estimate for binned data that assumes
+    all data points are in the center points of the bins.
+    Note: nonzero counts for out of range points will set the return value -np.inf.
+    :param alpha: exponent, float
+    :param points: observed values, shape (n,)
+    :param counts: number of occurrences for `points`, shape (n,)
+    :param xmin: the lower cutoff of the power-law
+    :param xmax: the upper cutoff of the power-law
+    """
+    if xmax == np.inf:
+        ll = pareto.logpdf(points, alpha - 1, scale=xmin)
+    else:
+        ll = truncated_pareto.logpdf(points, alpha - 1, float(xmax) / xmin, scale=xmin)
+    return np.sum(ll * counts, axis=_work_axis)
+
+
 def log_likelihood(points, counts, alpha, xmin, xmax=np.inf):
     """
     Give the likelihood of binned data assuming the distribution parameters.
-    This is a naive estimate that assumes all data points are in the geometric center of the bin
+    This can be seen as a naive estimate for binned data that assumes
+    all data points are in the center points of the bins.
+    Note: nonzero counts for out of range points will set the return value -np.inf.
     :param alpha: exponent, float
     :param points: observed values, shape (n,)
     :param counts: number of occurrences for `points`, shape (n,)
@@ -71,12 +92,14 @@ def log_likelihood(points, counts, alpha, xmin, xmax=np.inf):
     :param xmax: the upper cutoff of the power-law
     """
     points, counts = _check_points_counts(points, counts)
+    points, use_data = _trf_check_bounds(points, counts, xmin, xmax)
     # Out of range must result in logpdf returning ll == -np.inf
-    if xmax == np.inf:
-        ll = pareto.logpdf(points, alpha - 1, scale=xmin)
+    if np.any(counts[~use_data]):
+        # TODO: broadcasting would be difficult
+        ll = -np.inf
     else:
-        ll = truncated_pareto.logpdf(points, alpha - 1, float(xmax) / xmin, scale=xmin)
-    return np.sum(ll * counts, axis=_work_axis)
+        ll = _log_likelihood(points[use_data], counts[use_data], xmin, xmax, alpha)
+    return ll
 
 
 def hill_estimator(points, counts, xmin, xmax=np.inf):
@@ -90,6 +113,7 @@ def hill_estimator(points, counts, xmin, xmax=np.inf):
     points, counts = _check_points_counts(points, counts)
     points, use_data = _trf_check_bounds(points, counts, xmin, xmax)
     powered = counts * (np.log(points) - np.log(xmin))
+    # TODO: correction if xmax!=np.inf (no analytic solution)
     alpha = 1 + np.sum(counts[use_data]) / np.sum(powered[use_data])
     return alpha
 
@@ -152,14 +176,22 @@ def adaptive_xmin_xmax_ks(edges, counts, *args, **kwargs):
     return adaptive_search(find_xmin_xmax_ks, edges, counts, *args, **kwargs)
 
 
-def point_based_goodness(points, counts, alpha, xmin, xmax=np.inf, n_iter=1000, grid=None, debug=False, **kwargs):
+def point_based_goodness(points, counts, alpha, xmin, xmax=np.inf, n_iter=1000, grid=None, debug=False,
+                         random_state=None, **kwargs):
     # bins is required to reduce number of guesses
     """
     Find the p-value of `data` coming from the pareto of given parameters.
-    :param data: data samples, increasingly ordered if possible, shape (n,)
+    :param points: observed values, shape (n,)
+    :param counts: number of occurrences for `points`, shape (n,)
     :param alpha: the hypothesized exponent to be tested, float
     :param xmin: the lower cutoff of the hypothesized power-law, float
     :param xmax: the upper cutoff of the hypothesized power-law, float
+    :param n_iter: the number of samples, int
+    :param grid: inspected boundary values, increasing, shape (m,)
+    :param debug: bool
+    :param random_state:
+    :param **kwargs:
+    :return p: p-value
     """
 
     def gen_surrogate_ks(n_point, p_cat, p_low, p_high, alpha, xmin, xmax, grid):
@@ -175,12 +207,7 @@ def point_based_goodness(points, counts, alpha, xmin, xmax=np.inf, n_iter=1000, 
     if grid is None:
         grid = make_grid(points)
 
-    ks_collection = [gen_surrogate_ks(n_point, p_cat, p_low, p_high, alpha, xmin, xmax, grid) for i in
-                     progress_bar(range(n_iter))]
-    ks_collection = np.sort(ks_collection)
+    ks_collection = [gen_surrogate_ks() for i in progress_bar(range(n_iter))]
     ks_data = KS_test(points, counts, alpha, xmin, xmax)
 
-    p = np.searchsorted(ks_collection, ks_data) / float(n_iter)
-    if debug:
-        print(ks_collection, ks_data)
-    return p
+    return p_value_from_ks(ks_collection, ks_data, debug)

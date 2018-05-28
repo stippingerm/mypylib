@@ -15,7 +15,7 @@ from scipy.stats import pareto, multinomial
 from .base import progress_bar, truncated_pareto, \
     edges_from_arithmetic_centers, edges_from_geometric_centers, geometric_centers_from_edges as _get_centers, \
     aggregate_counts, make_search_grid, _adaptive_xmin_xmax_ks as adaptive_search, \
-    gen_surrogate_counts as _surrogate, _work_axis
+    gen_surrogate_counts as _surrogate, _work_axis, check_random_state, p_value_from_ks
 from .counted_data import hill_estimator as _naive_estimator
 
 
@@ -26,7 +26,7 @@ def _check_bins_counts(edges, counts, flatten=False, sort=False, min_range=None)
         edges = np.ravel(edges)
         counts = np.ravel(counts)
     if len(counts) < 2:
-        raise ValueError('at east two counts are requred for reasonable calculation, got'
+        raise ValueError('at least two counts are requred for reasonable calculation, got'
                          'edges="%s", counts="%s"'%(edges,counts))
     if edges[1:].shape != counts.shape:
         raise ValueError('points and counts must have compatible shapes (n+1,) and (n,), '
@@ -62,32 +62,34 @@ def _trf_check_bounds(edges, counts, xmin, xmax):
 def _log_likelihood(lefts, widths, counts, xmin, xmax, alpha):
     """
     Give the likelihood of binned data assuming the distribution parameters.
-    This is a correct estimate working for any sort of increasingly ordered bins.
-    :param lefts: bin boundaries, shape (n+1,)
-    :param rights: bin boundaries, shape (n+1,)
+    Note: the argument order supports easy optimization of alpha, see hill_estimator.
+    :param lefts: bin boundaries, shape (n,)
+    :param widths: bin lengths, shape (n,)
     :param counts: observed hits, shape (n,)
     :param xmin: the lower cutoff of the power-law
     :param xmax: the lower cutoff of the power-law
     :param alpha: exponent, float
     """
-    # accounted_wieght = pareto.cdf(xmax, scale=xmin)
     log_accounted_wieght = np.log1p(-pareto.sf(xmax, alpha-1, scale=xmin))
+    # accounted_weight = pareto.cdf(xmax, scale=xmin) if xmax<np.inf else 1
     # I believe this formulation is less prone to errors than using pareto.cdf
-    ll = (- np.sum(counts) * log_accounted_wieght
+    ll = (- np.sum(counts) * log_accounted_weight
           + np.sum(counts * np.log1p(-np.power(widths, -(alpha - 1))))
           - (alpha - 1) * np.sum(counts * (np.log(lefts) - np.log(xmin))))
+    # Maintenance info: zero counts out of bounds must not alter the result,
+    # this requirement is set by log_likelihood.
     return ll
 
 
-def log_likelihood(edges, counts, xmin, xmax, alpha):
+def log_likelihood(edges, counts, alpha, xmin, xmax=np.inf):
     """
     Give the likelihood of binned data assuming the distribution parameters.
     This is a correct estimate working for any sort of increasingly ordered bins.
+    Note: nonzero counts for out of range bins will set the return value -np.inf.
     :param edges: bin boundaries, shape (n+1,)
     :param counts: observed hits, shape (n,)
     :param xmin: the lower cutoff of the power-law
     :param xmax: the lower cutoff of the power-law
-    TODO: implement bound checking, xmax const rescaling
     :param alpha: exponent, float
     """
     edges, counts = _check_bins_counts(edges, counts)
@@ -96,29 +98,30 @@ def log_likelihood(edges, counts, xmin, xmax, alpha):
         # TODO: broadcasting would be difficult
         ll = -np.inf
     else:
+        # Note: _log_likelihood is insensitive to zero counts.
         ll = _log_likelihood(lefts, widths, counts, xmin, xmax, alpha)
     return ll
 
 
-def hill_estimator(edges, counts, xmin, xmax, **kwargs):
+def hill_estimator(edges, counts, xmin, xmax=np.inf, **kwargs):
     """
     Give the MLE for continuous power-law distribution exponent.
     :param edges: increasing bin boundaries, shape (n+1,)
     :param counts: counts in the bin, shape (n,)
     :param xmin: the cutoff of the power law
     """
-    from scipy.optimize import minimize, fsolve
+    from scipy.optimize import minimize
     # from functools import partial
     edges, counts = _check_bins_counts(edges, counts)
     lefts, widths, use_data, use_edge = _trf_check_bounds(edges, counts, xmin, xmax)
     args = lefts[use_data], widths[use_data], counts[use_data], xmin, xmax
-    x0 = np.array([_naive_estimator(_get_centers(edges), counts, xmin, xmax)])
+    x0 = np.array([_naive_estimator(_get_centers(edges), counts, xmin)])
     bounds = kwargs.pop('bounds', [(1.0001, None)])
     res = minimize(lambda a: -_log_likelihood(*args, a), x0, bounds=bounds, **kwargs)
     return np.asscalar(res.x)
 
 
-def KS_test(edges, counts, xmin, xmax, alpha):
+def KS_test(edges, counts, alpha, xmin, xmax=np.inf):
     """
     Give the Kolmogorov-Smirnov distance between the theoretic distribution and the binned data.
     :param edges: increasing bin boundaries, shape (n+1,)
@@ -151,7 +154,7 @@ def find_xmin_xmax_ks(edges, counts, grid=None, scaling_range=10, max_range=np.i
     :param no_xmax: assume that xmax=np.inf, bool
     :param ranking: do not select best match but return all results ordered decreasingly
     :keyword ...: parameters to pass to minimize call
-    :return xmin, xmax, ahat, ks:
+    :return ahat, xmin, xmax, ks:
     """
     edges, counts = _check_bins_counts(edges, counts, min_range=scaling_range)
     if grid is None:
@@ -166,7 +169,7 @@ def find_xmin_xmax_ks(edges, counts, grid=None, scaling_range=10, max_range=np.i
                                                 clip_low, clip_high, req_samples=req_samples)
 
     alpha_est = np.array([hill_estimator(edges, counts, xmin, xmax, **kwargs) for xmin, xmax in zip(low, high)])
-    ks = np.array([KS_test(edges, counts, xmin, xmax, ahat) for ahat, xmin, xmax in zip(alpha_est, low, high)])
+    ks = np.array([KS_test(edges, counts, ahat, xmin, xmax) for ahat, xmin, xmax in zip(alpha_est, low, high)])
     which = np.argsort(ks) if ranking else np.nanargmin(ks)
     return alpha_est[which], low[which], high[which], ks[which]
 
@@ -177,7 +180,8 @@ def adaptive_xmin_xmax_ks(edges, counts, *args, **kwargs):
     return adaptive_search(find_xmin_xmax_ks, edges, counts, *args, **kwargs)
 
 
-def goodness_of_fit(edges, counts, alpha, xmin, xmax=np.inf, n_iter=1000, debug=False, **kwargs):
+def goodness_of_fit(edges, counts, alpha, xmin, xmax=np.inf, n_iter=1000, grid=None, debug=False,
+                    random_state=None, **kwargs):
     # edges is required if xmax is not infty
     """
     Find the p-value of `data` coming from the pareto of given parameters.
@@ -186,6 +190,12 @@ def goodness_of_fit(edges, counts, alpha, xmin, xmax=np.inf, n_iter=1000, debug=
     :param alpha: the hypothesized exponent to be tested, float
     :param xmin: the lower cutoff of the hypothesized power-law, float
     :param xmax: the upper cutoff of the hypothesized power-law, float
+    :param n_iter: the number of samples, int
+    :param grid: inspected boundary values, increasing, shape (m,)
+    :param debug: bool
+    :param random_state:
+    :param **kwargs:
+    :return p: p-value
     """
 
     def gen_surrogate_data(n_point, p_cat, p_low, p_high, alpha, xmin, xmax, bins):
@@ -202,13 +212,10 @@ def goodness_of_fit(edges, counts, alpha, xmin, xmax=np.inf, n_iter=1000, debug=
     c_low, c_mid, c_high = counts[rights <= xmin], counts[(xmin <= lefts) & (rights <= xmax)], counts[xmax <= lefts]
     p_cat = np.array([np.sum(c_low), np.sum(c_mid), np.sum(c_high)]) / float(n_point)
     p_low, p_high = c_low / np.sum(c_low), c_high / np.sum(c_high)
+    if grid is None:
+        grid = edges
 
-    ks_collection = [gen_surrogate_data(n_point, p_cat, p_low, p_high, alpha, xmin, xmax, edges) for i in
-                     progress_bar(range(n_iter))]
-    ks_collection = np.sort(ks_collection)
-    ks_data = KS_test(edges, counts, xmin, xmax, alpha)
+    ks_collection = [gen_surrogate_data() for i in progress_bar(range(n_iter))]
+    ks_data = KS_test(edges, counts, alpha, xmin, xmax)
 
-    p = np.searchsorted(ks_collection, ks_data) / float(n_iter)
-    if debug:
-        print(ks_collection, ks_data)
-    return p
+    return p_value_from_ks(ks_collection, ks_data, debug)

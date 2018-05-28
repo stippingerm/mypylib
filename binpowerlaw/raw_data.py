@@ -12,7 +12,7 @@
 import numpy as np
 from scipy.stats import pareto, multinomial
 from .base import progress_bar, truncated_pareto, make_search_grid, \
-    gen_surrogate_data as _surrogate, _work_axis
+    gen_surrogate_data as _surrogate, _work_axis, check_random_state, p_value_from_ks
 
 
 def _check_data(data, flatten=False, sort=False):
@@ -43,6 +43,7 @@ def _trf_check_bounds(data, xmin, xmax):
 def log_likelihood(data, alpha, xmin, xmax=np.inf):
     """
     Give the likelihood of data assuming the distribution parameters.
+    Note: out of range points will set the return value -np.inf.
     :param data: observed samples, shape (m,)
     :param xmin: the lower cutoff of the power-law
     :param xmax: the upper cutoff of the power-law, currently ignored
@@ -103,9 +104,11 @@ def find_xmin_xmax_ks(data, grid=None, scaling_range=10, max_range=np.inf,
     :param no_xmax: assume that xmax=np.inf, bool
     :return xmin, xmax, ahat, ks:
     """
+    data = _check_data(data)
     if grid is None:
         grid = np.unique(data)
-    counts = np.histogram(data, grid)
+
+    counts, _ = np.histogram(data, grid)
     n_cum = np.concatenate(([0], np.cumsum(counts)))
 
     low, high, n_low, n_high = make_search_grid(grid, n_cum, no_xmax, scaling_range, max_range,
@@ -117,14 +120,20 @@ def find_xmin_xmax_ks(data, grid=None, scaling_range=10, max_range=np.inf,
     return alpha_est[which], low[which], high[which], ks[which]
 
 
-def goodness_of_fit(data, alpha, xmin, xmax=np.inf, n_iter=1000, grid=None, debug=False, **kwargs):
+def goodness_of_fit(data, alpha, xmin, xmax=np.inf, n_iter=1000, grid=None, debug=False, random_state=None,  **kwargs):
     # bins is required to reduce number of guesses
     """
     Find the p-value of `data` coming from the pareto of given parameters.
     :param data: data samples, increasingly ordered if possible, shape (n,)
+    :param alpha: the hypothesized exponent to be tested, float
     :param xmin: the lower cutoff of the hypothesized power-law, float
     :param xmax: the upper cutoff of the hypothesized power-law, float
-    :param alpha: the hypothesized exponent to be tested, float
+    :param n_iter: the number of samples, int
+    :param grid: inspected boundary values, increasing, shape (m,)
+    :param debug: bool
+    :param random_state:
+    :param **kwargs:
+    :return p: p-value
     """
 
     def gen_surrogate_ks(n_point, p_cat, low, high, alpha, xmin, xmax, grid):
@@ -139,12 +148,7 @@ def goodness_of_fit(data, alpha, xmin, xmax=np.inf, n_iter=1000, grid=None, debu
     if grid is None:
         grid = np.unique(data)
 
-    ks_collection = [gen_surrogate_ks(n_point, p_cat, low, high, alpha, xmin, xmax, grid) for i in
-                     progress_bar(range(n_iter))]
-    ks_collection = np.sort(ks_collection)
+    ks_collection = [gen_surrogate_ks() for i in progress_bar(range(n_iter))]
     ks_data = KS_test(data, alpha, xmin, xmax)
 
-    p = np.searchsorted(ks_collection, ks_data) / float(n_iter)
-    if debug:
-        print(ks_collection, ks_data)
-    return p
+    return p_value_from_ks(ks_collection, ks_data, debug)
