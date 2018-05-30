@@ -28,6 +28,12 @@ except ModuleNotFoundError:
 class truncated_pareto_gen(rv_continuous):
     """Truncated power-law distribution, see scipy.stats.pareto too"""
 
+    def _argcheck(self, b, m):
+        self.b = m
+        return (0 < b) and (1 < m)
+
+    # TODO: remove manual bound checking from the functions below
+
     def _cdf(self, x, b, m):
         return np.clip(pareto.cdf(x, b) / pareto.cdf(m, b), None, 1)
 
@@ -49,7 +55,8 @@ truncated_pareto = truncated_pareto_gen(a=1.0, name="truncated_pareto")
 
 # The scipy.stats.zipf distribution implements the discrete version for xmin=1.
 # Note that the scale and loc parameters do not fit the purpose of xmin!=1.
-# Here s is for lower (included) and m for upper (excluded) bound.
+# Here s is for lower (included) and m for upper (excluded) bound, i.e.,
+# the support is k = xmin, ..., xmax + 1
 # Generating samples for exponent b<2 is very tedious, advanced method needs to be implemented.
 # For advanced rvs ideas see Section D and Ref. [46] within
 #   Clauset, A., Shalizi, C. R., & Newman, M. E. J. (2009). Power-law distributions in empirical data.
@@ -57,6 +64,12 @@ truncated_pareto = truncated_pareto_gen(a=1.0, name="truncated_pareto")
 
 class genzipf_gen(rv_discrete):
     """Generalized Zipf (discrete power-law) distribution, see scipy.stats.zipf too"""
+
+    def _argcheck(self, b, m):
+        self.b = int(m)
+        return (0 < b) and (1 < m)  # and np.allclose(self.b, m)
+
+    # TODO: remove manual bound checking from the functions below
 
     def _cdf(self, x, b, s):
         return 1.0 - np.clip(zeta(b, x + 1) / zeta(b, s), None, 1)
@@ -77,6 +90,13 @@ genzipf = genzipf_gen(a=1.0, name="genzipf")
 class truncated_zipf_gen(rv_discrete):
     """Truncated Zipf (discrete power-law) distribution, see scipy.stats.zipf too"""
 
+    def _argcheck(self, b, s, m):
+        self.a = int(s)
+        self.b = int(m)
+        return (0 < b) and (0 < s) and (s < m)  # and np.allclose([self.a, self.b], [s, m])
+
+    # TODO: remove manual bound checking from the functions below
+
     def _cdf(self, x, b, s, m):
         return 1.0 - np.clip((zeta(b, x + 1) - zeta(b, m)) / (zeta(b, s) - zeta(b, m)), 0, 1)
 
@@ -91,7 +111,7 @@ class truncated_zipf_gen(rv_discrete):
         return np.select([(s <= x) & (x < m)], [-b * np.log(x) - np.log(zeta(b, s) - zeta(b, m))], -np.inf)
 
 
-truncated_zipf = truncated_zipf_gen(a=1.0, name="truncated_zipf")
+truncated_zipf = truncated_zipf_gen(name="truncated_zipf")
 
 
 # copy-pasted from scikit-learn utils/validation.py
