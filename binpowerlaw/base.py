@@ -51,6 +51,83 @@ class truncated_pareto_gen(rv_continuous):
 truncated_pareto = truncated_pareto_gen(a=1.0, name="truncated_pareto")
 
 
+# In the scipy.stats.pareto implementation the scale parameter plays the role of xmin while
+# loc has no standard interpretation.
+
+class extended_pareto_gen(rv_continuous):
+    """Truncated power-law distribution extended to work for all real exponents, see scipy.stats.pareto too"""
+
+    @staticmethod
+    def _np_integrate_1x(x, b):
+        with np.errstate(invalid='ignore'):
+            choices = [np.log(x), (1 - np.float_power(x, -b)) / b]
+        return np.select([b == 0, b != 0], choices, np.nan)
+
+    @staticmethod
+    def _np_log_integrate_1x(x, b):
+        with np.errstate(invalid='ignore'):
+            choices = [np.log(np.log(x)), np.log1p(-np.float_power(x, -b)) - np.log(b),
+                       np.log((1 - np.float_power(x, -b)) / b)]
+        return np.select([b == 0, b > 0, b < 0], choices, np.nan)
+
+    @staticmethod
+    def _np_invert_fullq(q, b):
+        with np.errstate(invalid='ignore'):
+            choices = [np.exp(q), np.float_power(1 - q, -1.0 / b)]
+        return np.select([b == 0, b != 0], choices, np.nan)
+
+    @staticmethod
+    def _integrate_1x(x, b):
+        return np.log(x) if b == 0 else (1 - np.float_power(x, -b)) / b
+
+    @staticmethod
+    def _log_integrate_1x(x, b):
+        return np.log(np.log(x)) if b == 0 else (
+            np.log1p(-np.float_power(x, -b)) - np.log(b) if b > 0 else np.log((1 - np.float_power(x, -b)) / b))
+
+    @staticmethod
+    def _invert_fullq(q, b):
+        return np.exp(q) if b == 0 else np.float_power(1 - b * q, -1.0 / b)
+
+    @staticmethod
+    def _vec_integrate_1x(x, b):
+        fun = np.vectorize(extended_pareto_gen._integrate_1x)
+        return fun(x, b)
+
+    @staticmethod
+    def _vec_log_integrate_1x(x, b):
+        fun = np.vectorize(extended_pareto_gen._log_integrate_1x)
+        return fun(x, b)
+
+    @staticmethod
+    def _vec_invert_fullq(q, b):
+        fun = np.vectorize(extended_pareto_gen._invert_fullq)
+        return fun(q, b)
+
+    def _argcheck(self, b, m):
+        self.b = m
+        return np.all(1 < m)
+
+    def _cdf(self, x, b, m):
+        return self._vec_integrate_1x(x, b) / self._vec_integrate_1x(m, b)
+
+    def _logcdf(self, x, b, m):
+        return self._vec_log_integrate_1x(x, b) - self._vec_log_integrate_1x(m, b)
+
+    def _ppf(self, q, b, m):
+        fullq = q * self._vec_integrate_1x(m, b)
+        return self._vec_invert_fullq(fullq, b)
+
+    def _pdf(self, x, b, m):
+        return np.float_power(x, -(b + 1)) / self._vec_integrate_1x(m, b)
+
+    def _logpdf(self, x, b, m):
+        return -(b + 1) * np.log(x) - self._vec_log_integrate_1x(m, b)
+
+
+extended_pareto = extended_pareto_gen(a=1.0, name="extended_pareto")
+
+
 # The scipy.stats.zipf distribution implements the discrete version for xmin=1.
 # Note that the scale and loc parameters do not fit the purpose of xmin!=1.
 # Here s is for lower (included) and m for upper (excluded) bound, i.e.,
