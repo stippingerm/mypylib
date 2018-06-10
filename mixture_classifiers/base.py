@@ -151,15 +151,17 @@ class MixtureClassifierMixin(ClassifierMixin):
 
     @abstractmethod
     def decision_function(self, X):
-        """Predict probabilities for samples in X.
+        """Predict confidence scores for samples.
         Parameters
         ----------
-        X : {array-like, sparse matrix}, shape = [n_samples, n_features]
+        X : {array-like, sparse matrix}, shape = (n_samples, n_features)
             Samples.
         Returns
         -------
-        C : array, shape = [n_samples]
-            Predicted class label per sample.
+        array, shape=(n_samples,) if n_classes == 2 else (n_samples, n_classes)
+            Confidence scores per (sample, class) combination. In the binary
+            case, confidence score for self.classes_[1] where >0 means this
+            class would be predicted.
         """
         pass
 

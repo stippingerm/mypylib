@@ -318,18 +318,15 @@ class PluginClassifier(MixtureClassifierMixin, BaseMixture):
         self.classes_init = classes_init
 
     def decision_function(self, X):
-        """Predict the labels for the data samples in X using trained model.
-
+        """Predict confidence scores for samples.
         Parameters
         ----------
-        X : array-like, shape (n_samples, n_features)
-            List of n_features-dimensional data points. Each row
-            corresponds to a single data point.
-
+        X : array-like, shape = (n_samples, n_features)
+            Samples.
         Returns
         -------
-        labels : array, shape (n_samples,)
-            Component labels.
+        array, (n_samples, n_classes)
+            Confidence scores per (sample, class) combination.
         """
         self._check_is_fitted()
         # X = _check_X(X, n_features=self.means_.shape[1]) TODO
