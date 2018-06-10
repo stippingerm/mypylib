@@ -114,6 +114,48 @@ class truncated_zipf_gen(rv_discrete):
 truncated_zipf = truncated_zipf_gen(name="truncated_zipf")
 
 
+def dispatch_logpdf(data, alpha, xmin, xmax, discrete):
+    if discrete:
+        if np.isinf(xmax):
+            ll = genzipf.logpmf(data, alpha, xmin)
+        else:
+            ll = truncated_zipf.logpmf(data, alpha, xmin, xmax)
+    else:
+        if np.isinf(xmax):
+            ll = pareto.logpdf(data, alpha - 1, scale=xmin)
+        else:
+            ll = truncated_pareto.logpdf(data, alpha - 1, float(xmax) / xmin, scale=xmin)
+    return ll
+
+
+def dispatch_cdf(data, alpha, xmin, xmax, discrete):
+    if discrete:
+        if np.isinf(xmax):
+            ll = genzipf.cdf(data, alpha, xmin)
+        else:
+            ll = truncated_zipf.cdf(data, alpha, xmin, xmax)
+    else:
+        if np.isinf(xmax):
+            ll = pareto.cdf(data, alpha - 1, scale=xmin)
+        else:
+            ll = truncated_pareto.cdf(data, alpha - 1, float(xmax) / xmin, scale=xmin)
+    return ll
+
+
+def dispatch_rvs(alpha, xmin, xmax, discrete, size=1, random_state=None):
+    if discrete:
+        if np.isinf(xmax):
+            ll = genzipf.rvs(alpha, xmin, size=size, random_state=random_state)
+        else:
+            ll = truncated_zipf.rvs(alpha, xmin, xmax, size=size, random_state=random_state)
+    else:
+        if np.isinf(xmax):
+            ll = pareto.rvs(alpha - 1, scale=xmin, size=size, random_state=random_state)
+        else:
+            ll = truncated_pareto.rvs(alpha - 1, float(xmax) / xmin, scale=xmin, size=size, random_state=random_state)
+    return ll
+
+
 # copy-pasted from scikit-learn utils/validation.py
 def check_random_state(seed):
     """Turn seed into a np.random.RandomState instance
@@ -289,7 +331,7 @@ def _adaptive_xmin_xmax_ks(fun, edges, *args, n_work, method='twopass', debug=Fa
     return fun(edges, *args, grid=work_edges, **kwargs, ranking=ranking)
 
 
-def gen_surrogate_data(n_point, p_cat, low, high, alpha, xmin, xmax, random_state):
+def gen_surrogate_data(n_point, p_cat, low, high, alpha, xmin, xmax, discrete, random_state):
     """
     Generate surrogate data points
     :param n_point: total number of data points
@@ -297,6 +339,8 @@ def gen_surrogate_data(n_point, p_cat, low, high, alpha, xmin, xmax, random_stat
     :param low, high: data to be subsampled (with replacement) for categories `low` and `high`
     :param alpha: exponent of the `pareto` regime
     :param xmin, xmax: boundaries of the `pareto` regime, so that all(low<xmin) and all (xmax<=high)
+    :param discrete: use zipf distribution instead of pareto, bool
+    :param random_state:
     :return: surrogate sample
     """
     random_state = check_random_state(random_state)
@@ -307,11 +351,7 @@ def gen_surrogate_data(n_point, p_cat, low, high, alpha, xmin, xmax, random_stat
     if s_high:
         sample[s_low + s_mid:n_point] = random_state.choice(high, s_high, replace=True)
 
-    if xmax == np.inf:
-        sample[s_low:s_low + s_mid] = pareto.rvs(alpha, scale=xmin, size=s_mid, random_state=random_state)
-    else:
-        sample[s_low:s_low + s_mid] = truncated_pareto.rvs(alpha, xmax / float(xmin), scale=xmin, size=s_mid,
-                                                           random_state=random_state)
+    sample[s_low:s_low + s_mid] = dispatch_rvs(alpha, xmin, xmax, discrete, size=s_mid, random_state=random_state)
 
     random_state.shuffle(sample)
     return sample
@@ -324,15 +364,16 @@ def gen_surrogate_counts(n_point, p_cat, p_low, p_high, alpha, xmin, xmax, bins,
     :param p_cat: probability of `low`, `pareto` and `high` categories
     :param p_low, p_high: hit probabilities within categories `low` and `high`
     :param alpha: exponent of the `pareto` regime
-    :param xmin, xmax: boundaries of the `pareto` regime, so that all(low<xmin) and all (xmax<=high)
+    :param xmin, xmax: boundaries of the `pareto` regime, so that all(low<xmin) and all(xmax<=high)
+    :param bins: bin boundaries (used for calculating cdf and or binning samples)
+    :param discrete: use zipf distribution instead of pareto, bool
+    :param random_state:
     :return: surrogate hit counts
     """
     random_state = check_random_state(random_state)
     s_low, s_mid, s_high = multinomial.rvs(n_point, p_cat, random_state=random_state)
-    if xmax == np.inf:
-        sample = pareto.rvs(alpha, scale=xmin, size=s_mid, random_state=random_state)
-    else:
-        sample = truncated_pareto.rvs(alpha, xmax / float(xmin), scale=xmin, size=s_mid, random_state=random_state)
+    # TODO: the same can be achieved by using the cdf and multinomial sampling, see whether it is stable enough.
+    sample = dispatch_rvs(alpha, xmin, xmax, discrete, size=s_mid, random_state=random_state)
 
     counts, _ = np.histogram(sample, bins)
     if s_low:
@@ -347,7 +388,7 @@ def p_value_from_ks(ks_collection, ks_data, debug=False):
     ks_collection = np.sort(ks_collection)
     p = 1 - np.searchsorted(ks_collection, ks_data) / float(len(ks_collection))
     if debug:
-        print(ks_collection, ks_data)
+        print('#ks', ks_collection, ks_data)
     return p
 
 # Make a section x0<x<x1 of cdf F having f0 = F(x0), f1 = F(x1)
