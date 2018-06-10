@@ -1337,12 +1337,21 @@ def _no_progress_bar(x, *args, **kwargs):
     return x
 
 
-def _default_feaature_selection(n_feature):
+def _default_feature_selection(n_feature):
     return [np.arange(n_feature)]
 
 
 def _first_of_dict(d):
     return d[next(iter(d.keys()))]
+
+
+class random_feature_selector():
+    def __init__(self, n_total, random_state):
+        self.random_state = check_random_state(random_state)
+        self.n_total = int(n_total)
+
+    def __call__(self, n_select):
+        return self.random_state.choice(self.n_total, 1, replace=False)
 
 
 def cross_validate_iterator(estimator, X, y=None, groups=None, scoring=None, cv=None, X_for_test=None,
@@ -1410,7 +1419,7 @@ def cross_validate_iterator(estimator, X, y=None, groups=None, scoring=None, cv=
         progress_bar = _no_progress_bar
 
     if feature_selection_generator is None:
-        feature_selection_generator = _default_feaature_selection
+        feature_selection_generator = _default_feature_selection
         inner_progress_bar = _no_progress_bar
     else:
         def inner_progress_bar(arr, *args, **kwargs):
