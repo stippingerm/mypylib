@@ -12,7 +12,8 @@
 import numpy as np
 from scipy.stats import pareto, multinomial
 from .base import progress_bar, truncated_pareto, make_search_grid, \
-    gen_surrogate_data as _surrogate, _work_axis, check_random_state, p_value_from_ks
+    gen_surrogate_data as _surrogate, _work_axis, check_random_state, \
+    p_value_from_ks, uncertainty_of_alpha
 
 
 def _check_data(data, flatten=False, sort=False):
@@ -94,7 +95,7 @@ def KS_test(data, alpha, xmin, xmax=np.inf):
 
 def find_xmin_xmax_ks(data, grid=None, scaling_range=10, max_range=np.inf,
                       clip_low=np.inf, clip_high=0, req_samples=100,
-                      no_xmax=True, ranking=False):
+                      no_xmax=True, debug=False, ranking=False):
     """
     Find the best scaling interval, exponent and the Kolmogorov-Smirnov distance which measures the fit quality.
     :param data: samples, if provided then used, shape (m,)
@@ -112,7 +113,7 @@ def find_xmin_xmax_ks(data, grid=None, scaling_range=10, max_range=np.inf,
     n_cum = np.concatenate(([0], np.cumsum(counts)))
 
     low, high, n_low, n_high = make_search_grid(grid, n_cum, no_xmax, scaling_range, max_range,
-                                                clip_low, clip_high, req_samples=req_samples)
+                                                clip_low, clip_high, req_samples=req_samples, debug=debug)
 
     alpha_est = np.array([hill_estimator(data, xmin, xmax) for xmin, xmax in zip(low, high)])
     ks = np.array([KS_test(data, ahat, xmin, xmax) for ahat, xmin, xmax in zip(alpha_est, low, high)])
@@ -120,7 +121,7 @@ def find_xmin_xmax_ks(data, grid=None, scaling_range=10, max_range=np.inf,
     return alpha_est[which], low[which], high[which], ks[which]
 
 
-def goodness_of_fit(data, alpha, xmin, xmax=np.inf, n_iter=1000, grid=None, debug=False, random_state=None,  **kwargs):
+def goodness_of_fit(data, alpha, xmin, xmax=np.inf, n_iter=1000, grid=None, debug=False, random_state=None, **kwargs):
     # bins is required to reduce number of guesses
     """
     Find the p-value of `data` coming from the pareto of given parameters.
@@ -136,10 +137,12 @@ def goodness_of_fit(data, alpha, xmin, xmax=np.inf, n_iter=1000, grid=None, debu
     :return p: p-value
     """
 
-    def gen_surrogate_ks():
-        _sample = _surrogate(n_point, p_cat, low, high, alpha, xmin, xmax, random_state=random_state)
-        _xmin, _xmax, _ahat, _ks = find_xmin_xmax_ks(_sample, grid, no_xmax=no_xmax, **kwargs)
-        return _ks
+    def gen_surrogate_ks(i):
+        _sample = _surrogate(n_point, p_cat, low, high, alpha, xmin, xmax,
+                             discrete=False, random_state=random_state)
+        _ahat, _xmin, _xmax, _ks = find_xmin_xmax_ks(_sample, grid, no_xmax=no_xmax,
+                                                     debug=debug and (i < 10), **kwargs)
+        return _ahat, _ks
 
     data = _check_data(data)
     random_state = check_random_state(random_state)
@@ -152,7 +155,7 @@ def goodness_of_fit(data, alpha, xmin, xmax=np.inf, n_iter=1000, grid=None, debu
     if grid is None:
         grid = np.unique(data)
 
-    ks_collection = [gen_surrogate_ks() for i in progress_bar(range(n_iter))]
+    alpha_collection, ks_collection = zip(*[gen_surrogate_ks(i) for i in progress_bar(range(n_iter))])
     ks_data = KS_test(data, alpha, xmin, xmax)
 
-    return p_value_from_ks(ks_collection, ks_data, debug)
+    return uncertainty_of_alpha(alpha_collection, alpha, debug), p_value_from_ks(ks_collection, ks_data, debug)

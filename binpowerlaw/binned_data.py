@@ -15,7 +15,8 @@ from scipy.stats import pareto, multinomial
 from .base import progress_bar, truncated_pareto, \
     edges_from_arithmetic_centers, edges_from_geometric_centers, geometric_centers_from_edges as _get_centers, \
     aggregate_counts, make_search_grid, _adaptive_xmin_xmax_ks as adaptive_search, \
-    gen_surrogate_counts as _surrogate, _work_axis, check_random_state, p_value_from_ks
+    gen_surrogate_counts as _surrogate, _work_axis, check_random_state, \
+    p_value_from_ks, uncertainty_of_alpha
 from .counted_data import hill_estimator as _naive_estimator
 
 
@@ -72,12 +73,14 @@ def _log_likelihood(lefts, widths, counts, xmin, xmax, alpha):
     """
     # accounted_weight = pareto.cdf(xmax, scale=xmin) if xmax<np.inf else 1
     log_accounted_weight = np.log1p(-pareto.sf(xmax, alpha-1, scale=xmin))
-    # I believe this formulation is less prone to errors than using pareto.cdf
+    # I believe this analytically justified formulation using bin widths
+    # is less prone to errors than calculating the same bin log likelihoods
+    # as the difference of two (close) pareto.cdf values.
     ll = (- np.sum(counts) * log_accounted_weight
           + np.sum(counts * np.log1p(-np.power(widths, -(alpha - 1))))
           - (alpha - 1) * np.sum(counts * (np.log(lefts) - np.log(xmin))))
     # Maintenance info: zero counts out of bounds must not alter the result,
-    # this requirement is set by log_likelihood.
+    # This requirement is set by log_likelihood.
     return ll
 
 
@@ -143,7 +146,7 @@ def KS_test(edges, counts, alpha, xmin, xmax=np.inf):
 
 def find_xmin_xmax_ks(edges, counts, grid=None, scaling_range=10, max_range=np.inf,
                       clip_low=np.inf, clip_high=0, req_samples=100,
-                      no_xmax=True, ranking=False, **kwargs):
+                      no_xmax=True, ranking=False, debug=False, **kwargs):
     """
     Find the best scaling interval, exponent and the Kolmogorov-Smirnov distance which measures the fit quality.
     :param edges: increasing bin boundaries, shape (n+1,)
@@ -166,7 +169,7 @@ def find_xmin_xmax_ks(edges, counts, grid=None, scaling_range=10, max_range=np.i
     assert len(grid) == len(n_cum)
 
     low, high, n_low, n_high = make_search_grid(grid, n_cum, no_xmax, scaling_range, max_range,
-                                                clip_low, clip_high, req_samples=req_samples)
+                                                clip_low, clip_high, req_samples=req_samples, debug=debug)
 
     alpha_est = np.array([hill_estimator(edges, counts, xmin, xmax, **kwargs) for xmin, xmax in zip(low, high)])
     ks = np.array([KS_test(edges, counts, ahat, xmin, xmax) for ahat, xmin, xmax in zip(alpha_est, low, high)])
@@ -198,10 +201,12 @@ def goodness_of_fit(edges, counts, alpha, xmin, xmax=np.inf, n_iter=1000, grid=N
     :return p: p-value
     """
 
-    def gen_surrogate_data():
-        _counts = _surrogate(n_point, p_cat, p_low, p_high, alpha, xmin, xmax, grid, random_state=random_state)
-        _xmin, _xmax, _ahat, _ks = find_xmin_xmax_ks(grid, _counts, no_xmax=no_xmax, **kwargs)
-        return _ks
+    def gen_surrogate_data(i):
+        _counts = _surrogate(n_point, p_cat, p_low, p_high, alpha, xmin, xmax, bins=edges,
+                             discrete=False, random_state=random_state)
+        _ahat, _xmin, _xmax, _ks = find_xmin_xmax_ks(edges, _counts, grid, no_xmax=no_xmax,
+                                                     debug=debug and (i < 10), **kwargs)
+        return _ahat, _ks
 
     edges, counts = _check_bins_counts(edges, counts)
     random_state = check_random_state(random_state)
@@ -216,10 +221,10 @@ def goodness_of_fit(edges, counts, alpha, xmin, xmax=np.inf, n_iter=1000, grid=N
     c_low, c_mid, c_high = counts[rights <= xmin], counts[(xmin <= lefts) & (rights <= xmax)], counts[xmax <= lefts]
     p_cat = np.array([np.sum(c_low), np.sum(c_mid), np.sum(c_high)]) / float(n_point)
     p_low, p_high = c_low / np.sum(c_low), c_high / np.sum(c_high)
-    if grid is None:
-        grid = edges
+    #if grid is None:
+    #    grid = edges
 
-    ks_collection = [gen_surrogate_data() for i in progress_bar(range(n_iter))]
+    alpha_collection, ks_collection = zip(*[gen_surrogate_data(i) for i in progress_bar(range(n_iter))])
     ks_data = KS_test(edges, counts, alpha, xmin, xmax)
 
-    return p_value_from_ks(ks_collection, ks_data, debug)
+    return uncertainty_of_alpha(alpha_collection, alpha, debug), p_value_from_ks(ks_collection, ks_data, debug)

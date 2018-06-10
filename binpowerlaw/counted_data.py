@@ -15,7 +15,8 @@ from scipy.stats import pareto, multinomial
 from .base import progress_bar, truncated_pareto, genzipf, truncated_zipf, \
     edges_from_geometric_centers as make_grid, \
     aggregate_counts, make_search_grid, _adaptive_xmin_xmax_ks as adaptive_search, \
-    gen_surrogate_counts as _surrogate, _work_axis, check_random_state, p_value_from_ks
+    gen_surrogate_counts as _surrogate, _work_axis, check_random_state, \
+    p_value_from_ks, uncertainty_of_alpha
 
 
 def _check_points_counts(points, counts, flatten=False, sort=False, min_range=None):
@@ -196,7 +197,7 @@ def find_xmin_xmax_ks(points, counts, grid=None, scaling_range=10, max_range=np.
     assert len(grid) == len(n_cum)
 
     low, high, n_low, n_high = make_search_grid(grid, n_cum, no_xmax, scaling_range, max_range,
-                                                clip_low, clip_high, req_samples=req_samples)
+                                                clip_low, clip_high, req_samples=req_samples, debug=debug)
 
     alpha_est = np.array(
         [hill_estimator(points, counts, xmin, xmax, discrete, **kwargs) for xmin, xmax in zip(low, high)])
@@ -231,25 +232,29 @@ def goodness_of_fit(points, counts, alpha, xmin, xmax=np.inf, discrete=False, n_
     :return p: p-value
     """
 
-    def gen_surrogate_ks():
-        _xmin, _xmax, _ahat, _ks = find_xmin_xmax_ks(grid, _counts, no_xmax=no_xmax, **kwargs)
-        return _ks
+    def gen_surrogate_ks(i):
         _counts = _surrogate(n_point, p_cat, p_low, p_high, alpha, xmin, xmax, bins=edges,
                              discrete=discrete, random_state=random_state)
+        _ahat, _xmin, _xmax, _ks = find_xmin_xmax_ks(points, _counts, grid, no_xmax=no_xmax,
+                                                     debug=debug and (i < 10), **kwargs)
+        return _ahat, _ks
 
     points, counts = _check_points_counts(points, counts)
     random_state = check_random_state(random_state)
     alpha = float(alpha)
-    no_xmax = (xmax == np.inf)
+    no_xmax = np.isinf(xmax)
 
+    if discrete:
+        raise NotImplementedError
     n_point = np.sum(counts)
     c_low, c_mid, c_high = counts[points < xmin], counts[(xmin <= points) & (points < xmax)], counts[xmax <= points]
     p_cat = np.array([np.sum(c_low), np.sum(c_mid), np.sum(c_high)]) / float(n_point)
     p_low, p_high = c_low / np.sum(c_low), c_high / np.sum(c_high)
-    if grid is None:
-        grid = make_grid(points)
+    # if grid is None:
+    #    grid = make_grid(points)
+    edges = make_grid(points)
 
-    ks_collection = [gen_surrogate_ks() for i in progress_bar(range(n_iter))]
+    alpha_collection, ks_collection = zip(*[gen_surrogate_ks(i) for i in progress_bar(range(n_iter))])
     ks_data = KS_test(points, counts, alpha, xmin, xmax)
 
-    return p_value_from_ks(ks_collection, ks_data, debug)
+    return uncertainty_of_alpha(alpha_collection, alpha, debug), p_value_from_ks(ks_collection, ks_data, debug)

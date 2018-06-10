@@ -240,7 +240,7 @@ def aggregate_counts(points, counts, bins, right=False):
 
 
 def make_search_grid(edges, n_cum, no_xmax, scaling_range=1, max_range=np.inf,
-                     clip_low=np.inf, clip_high=0, req_samples=0):
+                     clip_low=np.inf, clip_high=0, req_samples=0, debug=False):
     if no_xmax:
         low, high = np.meshgrid(edges, np.inf)
         n_low, n_high = np.meshgrid(n_cum, n_cum[-1])
@@ -254,6 +254,10 @@ def make_search_grid(edges, n_cum, no_xmax, scaling_range=1, max_range=np.inf,
             low <= clip_low) & (high >= clip_high) & (req_samples < n_high - n_low)
     if np.sum(acceptable.astype(int)) == 0:
         raise ValueError('Empty search grid.')
+    elif debug:
+        print('Searching in %d combinations, low=%s, high=%s' % (
+            int(np.sum(acceptable.astype(int))), low[acceptable][[0, -1]], high[acceptable][[0, -1]]
+        ))
     return low[acceptable], high[acceptable], n_low[acceptable], n_high[acceptable]
 
 
@@ -357,7 +361,7 @@ def gen_surrogate_data(n_point, p_cat, low, high, alpha, xmin, xmax, discrete, r
     return sample
 
 
-def gen_surrogate_counts(n_point, p_cat, p_low, p_high, alpha, xmin, xmax, bins, random_state):
+def gen_surrogate_counts(n_point, p_cat, p_low, p_high, alpha, xmin, xmax, bins, discrete, random_state):
     """
     Generate surrogate hit counts
     :param n_point: total number of data points
@@ -390,6 +394,15 @@ def p_value_from_ks(ks_collection, ks_data, debug=False):
     if debug:
         print('#ks', ks_collection, ks_data)
     return p
+
+
+def uncertainty_of_alpha(alpha_collection, alpha, debug=False):
+    alpha_collection = np.asarray(alpha_collection)
+    sigma = np.sqrt(np.mean((alpha_collection - alpha) ** 2))
+    if debug:
+        print('#alpha', alpha_collection, alpha)
+    return sigma
+
 
 # Make a section x0<x<x1 of cdf F having f0 = F(x0), f1 = F(x1)
 # correspond to p0 = F~(x0), p1 = F~(x1) for x0<x<x1 by linear transformation.
