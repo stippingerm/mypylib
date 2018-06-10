@@ -32,22 +32,20 @@ class truncated_pareto_gen(rv_continuous):
         self.b = m
         return (0 < b) and (1 < m)
 
-    # TODO: remove manual bound checking from the functions below
-
     def _cdf(self, x, b, m):
-        return np.clip(pareto.cdf(x, b) / pareto.cdf(m, b), None, 1)
+        return pareto.cdf(x, b) / pareto.cdf(m, b)
 
     def _logcdf(self, x, b, m):
-        return np.clip(pareto.logcdf(x, b) - pareto.logcdf(m, b), None, 0)
+        return pareto.logcdf(x, b) - pareto.logcdf(m, b)
 
     def _ppf(self, q, b, m):
         return np.power(1.0 - q * pareto.cdf(m, b), -1.0 / b)
 
     def _pdf(self, x, b, m):
-        return np.select([x < m], [pareto.pdf(x, b) / pareto.cdf(m, b)], 0)
+        return pareto.pdf(x, b) / pareto.cdf(m, b)
 
     def _logpdf(self, x, b, m):
-        return np.select([x < m], [pareto.logpdf(x, b) - pareto.logcdf(m, b)], -np.inf)
+        return pareto.logpdf(x, b) - pareto.logcdf(m, b)
 
 
 truncated_pareto = truncated_pareto_gen(a=1.0, name="truncated_pareto")
@@ -65,23 +63,21 @@ truncated_pareto = truncated_pareto_gen(a=1.0, name="truncated_pareto")
 class genzipf_gen(rv_discrete):
     """Generalized Zipf (discrete power-law) distribution, see scipy.stats.zipf too"""
 
-    def _argcheck(self, b, m):
-        self.b = int(m)
-        return (0 < b) and (1 < m)  # and np.allclose(self.b, m)
-
-    # TODO: remove manual bound checking from the functions below
+    def _argcheck(self, b, s):
+        self.a = int(s)
+        return (0 < b) and (1 < s)  # and np.allclose(self.b, s)
 
     def _cdf(self, x, b, s):
-        return 1.0 - np.clip(zeta(b, x + 1) / zeta(b, s), None, 1)
+        return 1.0 - zeta(b, x + 1) / zeta(b, s)
 
     def _logcdf(self, x, b, s):
-        return np.log1p(-np.clip(zeta(b, x + 1) / zeta(b, s), None, 1))
+        return np.log1p(-zeta(b, x + 1) / zeta(b, s))
 
     def _pmf(self, x, b, s):
-        return np.select([s <= x], [np.power(x, np.asarray(-b, dtype=float)) / zeta(b, s)], 0)
+        return np.power(x, np.asarray(-b, dtype=float)) / zeta(b, s)
 
     def _logpmf(self, x, b, s):
-        return np.select([s <= x], [-b * np.log(x) - np.log(zeta(b, s))], -np.inf)
+        return -b * np.log(x) - np.log(zeta(b, s))
 
 
 genzipf = genzipf_gen(a=1.0, name="genzipf")
@@ -95,20 +91,17 @@ class truncated_zipf_gen(rv_discrete):
         self.b = int(m)
         return (0 < b) and (0 < s) and (s < m)  # and np.allclose([self.a, self.b], [s, m])
 
-    # TODO: remove manual bound checking from the functions below
-
     def _cdf(self, x, b, s, m):
-        return 1.0 - np.clip((zeta(b, x + 1) - zeta(b, m)) / (zeta(b, s) - zeta(b, m)), 0, 1)
+        return 1.0 - (zeta(b, x + 1) - zeta(b, m)) / (zeta(b, s) - zeta(b, m))
 
     def _logcdf(self, x, b, s, m):
-        return np.log1p(-np.clip((zeta(b, x + 1) - zeta(b, m)) / (zeta(b, s) - zeta(b, m)), 0, 1))
+        return np.log1p(-(zeta(b, x + 1) - zeta(b, m)) / (zeta(b, s) - zeta(b, m)))
 
     def _pmf(self, x, b, s, m):
-        return np.select([(s <= x) & (x < m)], [np.power(x, np.asarray(-b, dtype=float)) / (zeta(b, s) - zeta(b, m))],
-                         0)
+        return np.power(x, np.asarray(-b, dtype=float)) / (zeta(b, s) - zeta(b, m))
 
     def _logpmf(self, x, b, s, m):
-        return np.select([(s <= x) & (x < m)], [-b * np.log(x) - np.log(zeta(b, s) - zeta(b, m))], -np.inf)
+        return -b * np.log(x) - np.log(zeta(b, s) - zeta(b, m))
 
 
 truncated_zipf = truncated_zipf_gen(name="truncated_zipf")
