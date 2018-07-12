@@ -361,17 +361,27 @@ class UninformedPriorChecks(object):
         """
         n_samples, n_features = X.shape
 
-        # NOTE: as the data is used to estimate n_classes different components
-        # the original least degrees_of_freedom_prior being n_features was not
-        # a valid prior either. Since responsibilities were < 1.
+        # NOTE: the data is used to estimate n_classes different components
+        # therefore one cannot assume any positive number of samples to be
+        # present in a specific class (responsibilities may be < 1).
+        # The only way to get valid parameters for the resulting multivariate
+        # t distribution as posterior predictive is to require a strength
+        # (degrees_of_freedom_prior) being at least n_features.
+        # Remark: as of version 0.19.1 this was a superfluous requirement in
+        # the sklearn implementation because it calculated only the posterior
+        # (valid if any observations made) but not the posterior predictive.
+        if self.enforce_valid_posterior_predictive:
+            requirement = n_features
+        else:
+            requirement = -np.finfo(float).eps
         if self.degrees_of_freedom_prior is None:
-            self.degrees_of_freedom_prior_ = np.maximum(0., n_features-n_samples)
-        elif self.degrees_of_freedom_prior >= n_features - n_samples:
+            self.degrees_of_freedom_prior_ = np.maximum(requirement, 0.)
+        elif self.degrees_of_freedom_prior > requirement:
             self.degrees_of_freedom_prior_ = self.degrees_of_freedom_prior
         else:
             raise ValueError("The parameter 'degrees_of_freedom_prior' "
                              "should be greater than %d, but got %.3f."
-                             % (n_features - n_samples, self.degrees_of_freedom_prior))
+                             % (requirement, self.degrees_of_freedom_prior))
 
 
 class BayesianGaussianMixture(_BaseBayesianGaussianMixture):
@@ -478,6 +488,20 @@ class BayesianGaussianMixture(_BaseBayesianGaussianMixture):
                 (n_features, n_features) if 'tied',
                 (n_features)             if 'diag',
                 float                    if 'spherical'
+
+    use_uninformed_prior : bool, optional
+        Using uninformed prior allows to use the measured means and covariances
+        directly, i.e., without fusing them with a prior. In practice this means
+        setting `mean_precision_prior` and `degrees_of_freedom_prior` to zero.
+        However, for `degrees_of_freedom_prior` this is only feasible if
+        sufficient observations are made, see `enforce_valid_posterior_predictive`
+        for explanation. Default: False.
+
+    enforce_valid_posterior_predictive : bool, optional
+        The posterior predictive distribution is valid only if the number of
+        observations in each class is larger than one but the number of feaures.
+        To comply this requirement a minimum `degrees_of_freedom_prior` is
+        enforced. Default: True.
 
     n_integral_points : int
         Number of sampled Gaussian Mixtures used for prediction.
@@ -643,7 +667,7 @@ class BayesianGaussianMixture(_BaseBayesianGaussianMixture):
                  weight_concentration_prior=None,
                  mean_precision_prior=None, mean_prior=None,
                  degrees_of_freedom_prior=None, covariance_prior=None,
-                 use_uninformed_prior=False,
+                 use_uninformed_prior=False, enforce_valid_posterior_predictive=True,
                  n_integral_points=100, random_state=None, warm_start=False, verbose=0,
                  verbose_interval=10, progress_bar=None):
         super(BayesianGaussianMixture, self).__init__(
@@ -660,6 +684,7 @@ class BayesianGaussianMixture(_BaseBayesianGaussianMixture):
         self.use_weights = use_weights
         self.progress_bar = _no_progress_bar if progress_bar is None else progress_bar
         self.use_uninformed_prior = use_uninformed_prior
+        self.enforce_valid_posterior_predictive = enforce_valid_posterior_predictive
         #self._select_prior_checking()
 
     def _check_means_parameters(self, X):
@@ -1068,23 +1093,23 @@ class BayesianGaussianMixture(_BaseBayesianGaussianMixture):
 
 
 class BayesianGaussianClassifier(MixtureClassifierMixin, BayesianGaussianMixture):
-    """Gaussian Mixture.
+    """Variational Bayesian estimation of a Gaussian mixture.
 
-    Representation of a Gaussian mixture model probability distribution.
-    This class allows classification based on a Gaussian mixture
-    components. The main difference to GaussianMixture is that
-    responsibilities are set based on class label. This introduces some
-    computational overhead but opens the door towards classification
-    between Gaussian mixture distributions. However, this will need to
-    set the number of mixture components for each class.
+    This class allows to infer an approximate posterior distribution over the
+    parameters of a Gaussian mixture distribution. The effective number of
+    components can be inferred from the data.
 
-    Read more in the :ref:`User Guide <gmm>`.
+    The main difference to GaussianMixture is that responsibilities are set
+    based on class label. This introduces some computational overhead but opens
+    the door towards classification between Gaussian mixture components.
 
     .. versionadded:: 0.18
 
+    Read more in the :ref:`User Guide <bgmm>`.
+
     Parameters
     ----------
-    n_components : int or array-like shape (n_components,), defaults to 1.
+    n_components_per_class : int or array-like shape (n_components,), defaults to 1.
         The number of mixture components per class. TODO: IMPLEMENT OTHER THAN 1.
 
     covariance_type : {'full', 'tied', 'diag', 'spherical'},
@@ -1125,28 +1150,50 @@ class BayesianGaussianClassifier(MixtureClassifierMixin, BayesianGaussianMixture
         The user-provided component to class assignments if n_components is
         not 1. TO BE IMPLEMENTED
 
-    weights_init : array-like, shape (n_components, ), optional
-        The user-provided initial weights, defaults to None.
-        If it None, weights are initialized using the `init_params` method.
+    weight_concentration_prior_type : str, defaults to 'dirichlet_process'.
+        String describing the type of the weight concentration prior.
+        Must be one of::
+
+            'dirichlet_process' (using the Stick-breaking representation),
+            'dirichlet_distribution' (can favor more uniform weights).
+
+    weight_concentration_prior : float | None, optional.
+        The dirichlet concentration of each component on the weight
+        distribution (Dirichlet). This is commonly called gamma in the
+        literature. The higher concentration puts more mass in
+        the center and will lead to more components being active, while a lower
+        concentration parameter will lead to more mass at the edge of the
+        mixture weights simplex. The value of the parameter must be greater
+        than 0. If it is None, it's set to ``1. / n_components``.
 
     use_weights: bool, optional
         If set to false, do not use weights for prediction (useful if classes
         have different weights in the training and test set)
 
-    means_init : array-like, shape (n_components, n_features), optional
-        The user-provided initial means, defaults to None,
-        If it None, means are initialized using the `init_params` method.
+    mean_precision_prior : float | None, optional.
+        The precision prior on the mean distribution (Gaussian).
+        Controls the extend to where means can be placed. Smaller
+        values concentrate the means of each clusters around `mean_prior`.
+        The value of the parameter must be greater than 0.
+        If it is None, it's set to 1.
 
-    precisions_init : array-like, optional.
-        The user-provided initial precisions (inverse of the covariance
-        matrices), defaults to None.
-        If it None, precisions are initialized using the 'init_params' method.
-        The shape depends on 'covariance_type'::
+    mean_prior : array-like, shape (n_features,), optional
+        The prior on the mean distribution (Gaussian).
+        If it is None, it's set to the mean of X.
 
-            (n_components,)                        if 'spherical',
-            (n_features, n_features)               if 'tied',
-            (n_components, n_features)             if 'diag',
-            (n_components, n_features, n_features) if 'full'
+    degrees_of_freedom_prior : float | None, optional.
+        The prior of the number of degrees of freedom on the covariance
+        distributions (Wishart). If it is None, it's set to `n_features`.
+
+    covariance_prior : float or array-like, optional
+        The prior on the covariance distribution (Wishart).
+        If it is None, the emiprical covariance prior is initialized using the
+        covariance of X. The shape depends on `covariance_type`::
+
+                (n_features, n_features) if 'full',
+                (n_features, n_features) if 'tied',
+                (n_features)             if 'diag',
+                float                    if 'spherical'
 
     random_state : int, RandomState instance or None, optional (default=None)
         If int, random_state is the seed used by the random number generator;
@@ -1167,6 +1214,9 @@ class BayesianGaussianClassifier(MixtureClassifierMixin, BayesianGaussianMixture
 
     verbose_interval : int, default to 10.
         Number of iteration done before the next print.
+
+    progress_bar : object, default to None.
+        tqdm-like progress bar.
 
     Attributes
     ----------
@@ -1221,7 +1271,53 @@ class BayesianGaussianClassifier(MixtureClassifierMixin, BayesianGaussianMixture
         If n_components is 1, no EM must be performed, in this case, set to 1.
 
     lower_bound_ : float
-        Log-likelihood of the best fit of EM.
+        Lower bound value on the likelihood (of the training data with
+        respect to the model) of the best fit of inference.
+
+    weight_concentration_prior_ : tuple or float
+        The dirichlet concentration of each component on the weight
+        distribution (Dirichlet). The type depends on
+        ``weight_concentration_prior_type``::
+
+            (float, float) if 'dirichlet_process' (Beta parameters),
+            float          if 'dirichlet_distribution' (Dirichlet parameters).
+
+        The higher concentration puts more mass in
+        the center and will lead to more components being active, while a lower
+        concentration parameter will lead to more mass at the edge of the
+        simplex.
+
+    weight_concentration_ : array-like, shape (n_components,)
+        The dirichlet concentration of each component on the weight
+        distribution (Dirichlet).
+
+    mean_precision_prior : float
+        The precision prior on the mean distribution (Gaussian).
+        Controls the extend to where means can be placed.
+        Smaller values concentrate the means of each clusters around
+        `mean_prior`.
+
+    mean_precision_ : array-like, shape (n_components,)
+        The precision of each components on the mean distribution (Gaussian).
+
+    means_prior_ : array-like, shape (n_features,)
+        The prior on the mean distribution (Gaussian).
+
+    degrees_of_freedom_prior_ : float
+        The prior of the number of degrees of freedom on the covariance
+        distributions (Wishart).
+
+    degrees_of_freedom_ : array-like, shape (n_components,)
+        The number of degrees of freedom of each components in the model.
+
+    covariance_prior_ : float or array-like
+        The prior on the covariance distribution (Wishart).
+        The shape depends on `covariance_type`::
+
+            (n_features, n_features) if 'full',
+            (n_features, n_features) if 'tied',
+            (n_features)             if 'diag',
+            float                    if 'spherical'
 
     See Also
     --------
@@ -1238,7 +1334,7 @@ class BayesianGaussianClassifier(MixtureClassifierMixin, BayesianGaussianMixture
                  weight_concentration_prior=None,
                  mean_precision_prior=None, mean_prior=None,
                  degrees_of_freedom_prior=None, covariance_prior=None,
-                 use_uninformed_prior=False,
+                 use_uninformed_prior=False, enforce_valid_posterior_predictive=True,
                  n_integral_points=100, random_state=None, warm_start=False, verbose=0,
                  verbose_interval=10, progress_bar=None):
         BayesianGaussianMixture.__init__(self,
@@ -1251,6 +1347,7 @@ class BayesianGaussianClassifier(MixtureClassifierMixin, BayesianGaussianMixture
                                          degrees_of_freedom_prior=degrees_of_freedom_prior,
                                          covariance_prior=covariance_prior,
                                          use_uninformed_prior=use_uninformed_prior,
+                                         enforce_valid_posterior_predictive=enforce_valid_posterior_predictive,
                                          n_integral_points=n_integral_points, random_state=random_state,
                                          warm_start=warm_start, verbose=verbose,
                                          verbose_interval=verbose_interval, progress_bar=progress_bar)
@@ -1305,7 +1402,7 @@ class BayesianFairTiedClassifier(BayesianGaussianClassifier):
                  weight_concentration_prior=None,
                  mean_precision_prior=None, mean_prior=None,
                  degrees_of_freedom_prior=None, covariance_prior=None,
-                 use_uninformed_prior=False,
+                 use_uninformed_prior=False, enforce_valid_posterior_predictive=True,
                  n_integral_points=100, random_state=None, warm_start=False, verbose=0,
                  verbose_interval=10, progress_bar=None):
         BayesianGaussianClassifier.__init__(self,
@@ -1318,6 +1415,7 @@ class BayesianFairTiedClassifier(BayesianGaussianClassifier):
                                             degrees_of_freedom_prior=degrees_of_freedom_prior,
                                             covariance_prior=covariance_prior,
                                             use_uninformed_prior=use_uninformed_prior,
+                                            enforce_valid_posterior_predictive=enforce_valid_posterior_predictive,
                                             n_integral_points=n_integral_points, random_state=random_state,
                                             warm_start=warm_start, verbose=verbose,
                                             verbose_interval=verbose_interval, progress_bar=progress_bar)

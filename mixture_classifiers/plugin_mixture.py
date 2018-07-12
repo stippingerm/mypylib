@@ -26,12 +26,12 @@ from .base import MixtureClassifierMixin
 
 
 def _infer_stat_type(stat, mv_stat=None):
-    """Infer whether stat is a mulvtivariate statistics"""
+    """Infer whether stat is a multivariate statistics"""
     if mv_stat is None:
         from scipy import stats
         if isinstance(stat, (stats.rv_continuous, stats.rv_discrete)):
             mv_stat = False
-        elif isinstance(stat, (stats._multivariate.multi_rv_generic)):
+        elif isinstance(stat, (stats._multivariate.multi_rv_generic, )):
             mv_stat = True
         else:
             import warnings
@@ -41,7 +41,6 @@ def _infer_stat_type(stat, mv_stat=None):
 
 
 def _estimate_1d_stat_parameters(stat, X, resp, resolution=None):
-    # TODO the scipy interface does not support weights, discretize
     """Estimate the arbitrary 1d distribution parameters.
 
     Parameters
@@ -56,6 +55,13 @@ def _estimate_1d_stat_parameters(stat, X, resp, resolution=None):
     resp : array-like, shape (n_samples, n_components)
         The responsibilities for each data sample in X.
 
+    resolution : int or None, default None
+        Class responsibilities are approximated at this resolution as
+        stat.fit does not support weights. Note that entering high values
+        increases memory use and execution time proportionally.
+        # TODO the scipy interface does not support weights, discretize
+        # TODO test iterators to decrease memory need
+
     Returns
     -------
     nk : array-like, shape (n_components,)
@@ -66,8 +72,8 @@ def _estimate_1d_stat_parameters(stat, X, resp, resolution=None):
     """
 
     def arr_fit(x):
-        """Force stat.fit to return an array"""
-        return np.array(stat.fit(x), ndmin=1)
+        """Force stat.fit to return shape params as an array"""
+        return np.atleast_1d(stat.fit(x))
 
     nk = resp.sum(axis=0) + 10 * np.finfo(resp.dtype).eps
     n_components = resp.shape[1]
@@ -75,9 +81,14 @@ def _estimate_1d_stat_parameters(stat, X, resp, resolution=None):
         repeats = (resp > 0).astype(int)
     else:
         raise NotImplementedError
-    params = np.empty(n_components, dtype=object)
 
+    params = np.empty(n_components, dtype=object)
     # vec_fit = np.vectorize(arr_fit, signature='(n)->(p)')
+
+    # From X : n_samples x n_features and resp : n_samples x n_components
+    # From approximated: n_repeats (~n_samples) x n_features
+    # get params : n_components x n_features x n_shape
+    # (cannot be fully vectorized as approximated is different for each component)
     for i in range(0, n_components):
         approximated = np.repeat(X, repeats[:, i], axis=0)
         component_params = np.apply_along_axis(arr_fit, 1, approximated.T)
@@ -105,15 +116,20 @@ def _estimate_log_1d_stat_prob(stat, X, params):
     log_prob : array, shape (n_samples, n_components)
     """
 
-    def logpdf(x, shape_par):
-        """Decompress parameter list for stat.logpdf"""
+    def all_logpdf(x, shape_par):
+        """Invoke stat.logpdf with decompressed parameter list"""
         return stat.logpdf(x, *shape_par)
 
     n_samples, n_features = X.shape
     n_components = params.shape[0]
 
     log_prob = np.empty((n_samples, n_components))
-    vec_logpdf = np.vectorize(logpdf, signature='(n),(p)->(n)')
+    vec_logpdf = np.vectorize(all_logpdf, signature='(n),(p)->(n)')
+    # shape params are shared across n_samples axis (only)
+
+    # From X: n_samples x n_features and params : n_components x n_features x n_shape
+    # get log_prob : n_samples x n_components
+    # (broadcasting would required reshaping, n_features is eliminated by summation)
     for k, component_params in enumerate(params):
         # component_params: array-like, shape (n_features, n_shape_params)
         component_logpdf = vec_logpdf(X.T, component_params)
@@ -123,7 +139,6 @@ def _estimate_log_1d_stat_prob(stat, X, params):
 
 
 def _estimate_mv_stat_parameters(stat, X, resp, resolution=None):
-    # TODO the scipy interface does not support weights, discretize
     """Estimate the arbitrary multivariate distribution parameters.
 
     Parameters
@@ -138,13 +153,19 @@ def _estimate_mv_stat_parameters(stat, X, resp, resolution=None):
     resp : array-like, shape (n_samples, n_components)
         The responsibilities for each data sample in X.
 
+    resolution : int or None, default None
+        Class responsibilities are approximated at this resolution as
+        stat.fit does not support weights. Note that entering high values
+        increases memory use and execution time proportionally.
+        # TODO the scipy interface does not support weights, discretize
+
     Returns
     -------
     nk : array-like, shape (n_components,)
         The numbers of data samples in the current components.
 
-    params : tuple
-        The centers of the current components.
+    params : array-like of tuples, shape (n_components,)
+        The parameters of the current components.
     """
 
     nk = resp.sum(axis=0) + 10 * np.finfo(resp.dtype).eps
