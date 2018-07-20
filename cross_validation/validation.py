@@ -1160,8 +1160,8 @@ def _aggregate_score_dicts(scores):
     """Aggregate the list of dict to dict of np ndarray
 
     The aggregated output of _fit_and_score will be a list of dict
-    of form [{'prec': 0.1, 'acc':1.0}, {'prec': 0.1, 'acc':1.0}, sklearn..]
-    Convert it to a dict of array {'prec': np.array([0.1 sklearn..]), sklearn..}
+    of form [{'prec': 0.1, 'acc':1.0}, {'prec': 0.2, 'acc':0.8}, sklearn..]
+    Convert it to a dict of array {'prec': np.array([0.1 0.2 sklearn..]), sklearn..}
 
     Parameters
     ----------
@@ -1405,7 +1405,7 @@ def cross_validate_iterator(estimator, X, y=None, groups=None, scoring=None, cv=
         cv = check_cv(cv, y, classifier=is_classifier(estimator))
     # scorers, _ = _check_multimetric_scoring(estimator, scoring=scoring)
 
-    if how=='product':
+    if how == 'product':
         conditions = (estimator.items(), X.items(), X_for_test.items(), n_feature)
         conditions_iterator = iter_product(*conditions)
         total = np.product([len(x) for x in conditions])

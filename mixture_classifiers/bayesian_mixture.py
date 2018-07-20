@@ -823,7 +823,6 @@ class BayesianGaussianMixture(_BaseBayesianGaussianMixture):
         _, log_resp = _log_prob_to_resp(self._dispatch_weighted_log_prob(X))
         return np.exp(log_resp)
 
-
     def sample(self, n_samples=1, monte_carlo=False):
         """Generate random samples from the fitted Gaussian distribution.
 
@@ -895,7 +894,7 @@ class BayesianGaussianMixture(_BaseBayesianGaussianMixture):
                 MVT.multivariate_t.rvs(nu - d + 1, mean,
                                        (k + 1) / (k * (nu - d + 1)) * nu * self.covariances_, size=int(sample))
                 for (k, mean, sample) in zip(
-                self.mean_precision_, self.means_, n_samples_comp)])
+                    self.mean_precision_, self.means_, n_samples_comp)])
         elif self.covariance_type == "diag":
             X = np.vstack([
                 #  mean + rng.randn(sample, n_features) * np.sqrt(covariance)
@@ -975,7 +974,7 @@ class BayesianGaussianMixture(_BaseBayesianGaussianMixture):
             prob = prob + sgm._estimate_log_prob(X)
         return prob / n_integral_points
 
-    def _MC_sample_points(self, hyper_params, n_samples):
+    def _MC_sample_points(self, n_samples):
         """Predict the labels for the data samples in X using
         Monte Carlo sampled models.
 
@@ -997,9 +996,12 @@ class BayesianGaussianMixture(_BaseBayesianGaussianMixture):
 
         from sklearn.mixture.gaussian_mixture import GaussianMixture as SGM
         sgm = SGM(covariance_type=self.covariance_type)
+        hyper_params = (self.mean_precision_, self.degrees_of_freedom_, self.weights_,
+                        self.means_, self.covariances_, self.precisions_cholesky_)
         for i, base_params in self.progress_bar(
                 enumerate(self._sample_base_params(hyper_params, n_samples))):
             sgm._set_parameters(base_params)
+            # NOTE: passing random state is not supported
             X[i, :], y[i] = sgm.sample(1)
         return X
 
@@ -1020,9 +1022,10 @@ class BayesianGaussianMixture(_BaseBayesianGaussianMixture):
         (mean_precision_, degrees_of_freedom_, weights_, means_, covariances_,
          precisions_cholesky_) = hyper_params
 
+        rng = check_random_state(self.random_state)
         for i in range(n_integral_points):
             means, covariances = _sample_gaussian_parameters(
-                mean_precision_, means_, degrees_of_freedom_, covariances_, self.covariance_type, self.random_state)
+                mean_precision_, means_, degrees_of_freedom_, covariances_, self.covariance_type, rng)
             precisions_cholesky = _compute_precision_cholesky(
                 covariances, self.covariance_type)
             yield weights_, means, covariances, precisions_cholesky

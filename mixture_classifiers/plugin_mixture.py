@@ -409,7 +409,7 @@ class PluginClassifier(MixtureClassifierMixin, BaseMixture):
             Logarithm of the posterior probabilities (or responsibilities) of
             the point of each sample in X.
         """
-        n_samples, _ = X.shape
+        n_samples, n_features = X.shape
 
         if self.mv_stat:
             self.weights_, self.params_ = (
@@ -418,6 +418,9 @@ class PluginClassifier(MixtureClassifierMixin, BaseMixture):
             self.weights_, self.params_ = (
                 _estimate_1d_stat_parameters(self.stat, X, np.exp(log_resp)))
         self.weights_ /= n_samples
+        from types import SimpleNamespace
+        # sklearn.mixture.base.BaseMixture validates X based on this shape
+        self.means_ = SimpleNamespace(shape=[self.n_components, n_features])
         # self.precisions_cholesky_ = _compute_precision_cholesky(
         #    self.covariances_, self.covariance_type)
 
