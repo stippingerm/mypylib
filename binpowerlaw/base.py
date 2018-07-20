@@ -30,7 +30,7 @@ class truncated_pareto_gen(rv_continuous):
 
     def _argcheck(self, b, m):
         self.b = m
-        return (0 < b) and (1 < m)
+        return np.all(0 < b) and np.all(1 < m)
 
     def _cdf(self, x, b, m):
         return pareto.cdf(x, b) / pareto.cdf(m, b)
