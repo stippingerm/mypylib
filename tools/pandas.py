@@ -87,6 +87,24 @@ def _get_empty_df(data, column_names=None):
     return result
 
 
+def pd_reindex(data, index):
+    """Reindex with automatic level selection
+
+    Parameters
+    ----------
+    data: pandas.Series, pandas.DataFrame
+    index: subclass of pandas.Index
+
+    Returns
+    -------
+    reindexed: same type as `data`
+    """
+    try:
+        return data.reindex(index, level=index.names)
+    except TypeError:
+        return data.reindex(index)
+
+
 def to_frame(data):
     """Return DataFrame from `data`.
 
@@ -281,3 +299,14 @@ def wide_groupby(fun, df, columns=None, fun_args=tuple(),
     except:
         ret_df = pd.DataFrame.from_dict({idx: val for idx, val in zip(record_idx, values)}, orient='index')
     return ret_df
+
+
+def transition_graph(seq):
+    """Transition graph of a chain with frequencies"""
+    # TODO: same can be done with np.unique
+    seq = np.asarray(seq)
+    df = pd.DataFrame()
+    df['from'] = seq[:-1]
+    df['to'] = seq[1:]
+    df['count'] = 1
+    return df.groupby(['from', 'to']).sum().reset_index()
