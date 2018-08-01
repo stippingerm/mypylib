@@ -366,11 +366,13 @@ class GaussianClassifier(MixtureClassifierMixin, GaussianMixture):
 
 
 class FairTiedClassifier(GaussianClassifier):
-    def __init__(self, n_components=1, covariance_type='full', tol=1e-3,
+    def __init__(self, n_components=1, covariance_type='tied', tol=1e-3,
                  reg_covar=1e-6, max_iter=100, n_init=1, init_params='kmeans',
                  classes_init=None, weights_init=None, use_weights=True, means_init=None, precisions_init=None,
                  random_state=None, warm_start=False,
                  verbose=0, verbose_interval=10):
+        if covariance_type != 'tied':
+            raise ValueError('Fair covariance estimation may be requested for tied covariances only.')
         GaussianClassifier.__init__(self,
                                     n_components_per_class=n_components, covariance_type=covariance_type, tol=tol,
                                     reg_covar=reg_covar, max_iter=max_iter, n_init=n_init, init_params=init_params,
@@ -378,8 +380,6 @@ class FairTiedClassifier(GaussianClassifier):
                                     means_init=means_init, precisions_init=precisions_init,
                                     random_state=random_state, warm_start=warm_start, verbose=verbose,
                                     verbose_interval=verbose_interval)
-        if covariance_type != 'tied':
-            raise ValueError('Fair covariance estimation is needed only in the tied case.')
 
     def _m_step(self, X, log_resp):
         """M step.

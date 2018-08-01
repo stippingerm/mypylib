@@ -1399,7 +1399,6 @@ class BayesianGaussianClassifier(MixtureClassifierMixin, BayesianGaussianMixture
 
 
 class BayesianFairTiedClassifier(BayesianGaussianClassifier):
-    def __init__(self, n_components_per_class=1, covariance_type='full', tol=1e-3,
                  reg_covar=1e-6, max_iter=100, n_init=1, init_params='kmeans', use_weights=True,
                  classes_init=None, weight_concentration_prior_type='dirichlet_process',
                  weight_concentration_prior=None,
@@ -1408,6 +1407,8 @@ class BayesianFairTiedClassifier(BayesianGaussianClassifier):
                  use_uninformed_prior=False, enforce_valid_posterior_predictive=True,
                  n_integral_points=100, random_state=None, warm_start=False, verbose=0,
                  verbose_interval=10, progress_bar=None):
+        if covariance_type != 'tied':
+            raise ValueError('Fair covariance estimation may be requested for tied covariances only.')
         BayesianGaussianClassifier.__init__(self,
                                             n_components_per_class=n_components_per_class, covariance_type=covariance_type, tol=tol,
                                             reg_covar=reg_covar, max_iter=max_iter, n_init=n_init, init_params=init_params,
@@ -1422,8 +1423,6 @@ class BayesianFairTiedClassifier(BayesianGaussianClassifier):
                                             n_integral_points=n_integral_points, random_state=random_state,
                                             warm_start=warm_start, verbose=verbose,
                                             verbose_interval=verbose_interval, progress_bar=progress_bar)
-        if covariance_type != 'tied':
-            raise ValueError('Fair covariance estimation is needed only in the tied case.')
 
     def _m_step(self, X, log_resp):
         """M step.
