@@ -1326,10 +1326,15 @@ def _cross_validate_inner(est_key, train_key, test_key, feat, est, train, y, gro
                           nested):
     # delay feature selection and cloning as it may require a lot of memory
     train, test = safe_features(train, feat), (test if test is None else safe_features(test, feat))
-    if nested:
-        result = nested_cross_validate(clone(est), train, y, groups, scoring, cv, test, **cv_params)
-    else:
-        result = cross_validate(clone(est), train, y, groups, scoring, cv, test, **cv_params)
+    cloned_est = clone(est)
+    try:
+        if nested:
+            result = nested_cross_validate(cloned_est, train, y, groups, scoring, cv, test, **cv_params)
+        else:
+            result = cross_validate(cloned_est, train, y, groups, scoring, cv, test, **cv_params)
+    except Exception as e:
+        msg = 'Failure to cross-validate %s' % est
+        raise ValueError(msg) from e
     return est_key, train_key, test_key, len(feat), feat, result
 
 
