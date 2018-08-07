@@ -39,6 +39,30 @@ def _exist(*unused):
     pass
 
 
+def _broadcast_shapes(a, b, align_as_numpy=True):
+    a, b = np.atleast_1d(a, b)
+    if a.ndim > 1 or b.ndim > 1:
+        raise ValueError('broadcasting of single shapes is supported only')
+    result_shape = np.maximum(len(a), len(b))
+    padded_a = np.ones(result_shape, dtype=int)
+    padded_b = np.ones(result_shape, dtype=int)
+    if align_as_numpy:
+        if len(a):
+            padded_a[-len(a):] = a
+        if len(b):
+            padded_b[-len(b):] = b
+    else:
+        if len(a):
+            padded_a[:len(a)] = a
+        if len(b):
+            padded_b[:len(b)] = b
+    to_change_a = (padded_a != padded_b) & (padded_b != 1)
+    if np.any(padded_a[to_change_a] != 1):
+        raise ValueError('shapes %s and %s could not be broadcast together' % (a, b))
+    padded_a[to_change_a] = padded_b[to_change_a]
+    return padded_a
+
+
 # ------------------------
 #  Parameters of a copula
 # ------------------------
@@ -74,7 +98,7 @@ def _exist(*unused):
 #
 # The copula is a multivariate distribution with support of $[0,1]^n$.
 # To achieve this one uses an arbitrary joint distribution $F_n$ and its
-# marginal version $F_1$ (they have the suport $I^n$ and $I$ respectively)
+# marginal version $F_1$ (they have the support $I^n$ and $I$ respectively)
 # and combines them to obtain the distribution of the copula:
 #
 #  $$ C(u_1, ..., u_n) = F_nn(F_1^{-1}(u_1}, ..., F_n^{-1}(u_n}) $$
@@ -177,16 +201,31 @@ def _process_quantiles(x, dim):
     return x
 
 
+def _align_vars(stat, data, params):
+    params = np.asarray(params)
+    data = np.asarray(data)
+    stat = np.asarray(stat)
+    n_sample = data.shape[-1]
+    stat = np.broadcast_to(stat, _broadcast_shapes(stat.shape, (n_sample,)))
+    params = np.broadcast_to(params.T, _broadcast_shapes(params.T.shape, (n_sample,))).T
+    return stat, data, params
+
+
 def _fit_individual_marginals(stat, data):
     """Estimate the parameters for marginal distributions.
 
     Parameters
     ----------
-    stat : array[scipy.stats.rv_continuous], shape (n_comp,)
+    stat : scipy.stats.rv_continuous or an array of them, shape (n_comp,)
 
     data : ndarray, shape (..., n_comp)
-        The components are listed in rows while realisations in columns"""
-    ret = [stat.fit(comp) for comp in data.T]
+        The components are listed in rows while realisations in columns
+
+    Returns
+    -------
+    params: list, shape (n_comp,) of tuples"""
+    stat, data, _ = _align_vars(stat, data, 0)
+    ret = [s.fit(comp) for s, comp in zip(stat, data.T)]
     return np.asarray(ret)
 
 
@@ -201,6 +240,7 @@ def _range_check(stat, data, params=None):
     """
     if stat is None:
         return True
+    # FIXME: this is wrong because it does not account for loc and scale
     if params is None:
         lo, up = stat.a, stat.b
         ret = (np.all(lo <= comp) & np.all(comp <= up) for comp in data.T)
@@ -208,11 +248,15 @@ def _range_check(stat, data, params=None):
         try:
             limits = ((stat(p).a, stat(p).b) for p in params)
             ret = (np.all(lo <= comp) & np.all(comp <= up) for (comp, (lo, up)) in zip(data.T, limits))
-            if not all(ret):
-                raise ValueError("Data point out of the support of marginal distribution")
-        except AttributeError:
-            import warnings
-            warnings.warn("Could not verify bounds.")
+        except AttributeError as e:
+            raise ValueError("Could not verify bounds.") from e
+    if not all(ret):
+        raise ValueError("Data point out of the support of marginal distribution")
+
+
+def _no_range_check(*args, **kwargs):
+    del args, kwargs
+    pass
 
 
 def _unit_interval_check(stat, data, params=None):
@@ -231,90 +275,105 @@ def _unit_interval_check(stat, data, params=None):
         raise ValueError("Data point out of the support [0,1] of marginal distribution")
 
 
-def _fit_common_marginal(stat, data):
+def _fit_common_marginal(stat, data, repeat=True):
     """Estimate the parameters for marginal distributions.
 
     Parameters
     ----------
-    stat : array[scipy.stats.rv_continuous], shape (n_comp,)
+    stat : scipy.stats.rv_continuous
 
-    data : ndarray, shape (..., n_comp)
-        The components are listed in rows while realisations in columns"""
-    ret = np.array(stat.fit(data.ravel()), ndmin=1)
-    return np.repeat(ret[np.newaxis, :], len(data.T), axis=0)
+    data : array, shape (..., n_comp)
+        The components are listed in rows while realisations in columns
+
+    Returns
+    -------
+    params: array, shape (n_comp, n_param_per_comp, ...)"""
+    _, data, _ = _align_vars(0, data, 0)
+    ret = np.array(stat.fit(data.ravel()), ndmin=1)[np.newaxis, ...]
+    if repeat:
+        final_shape = _broadcast_shapes(ret.shape, data.shape[-1], align_as_numpy=False)
+        ret = np.broadcast_to(ret, final_shape)
+    return ret
 
 
-def _transform_to_internal(stat, data, params):
-    """Transform observable to the internal representation,
-    i.e. [0,1]^n hypercube for setting arbitrary marginals
-    and anything for the copula distribution.
+def _transform_to_hypercube(stat, data, params):
+    """Transform the observable domain to the [0,1]^n hypercube representation.
 
     Parameters
     ----------
-    stat : subclass of scipy.stats.rv_continuous
+    stat : scipy.stats.rv_continuous or an array of them, shape (n_comp,)
 
     data : ndarray, shape (..., n_comp)
-        The components are listed in rows while realisations in columns
+        The components are listed in rows while realisations in columns.
+        Values should conform the domain of definition of the `stat` class.
 
     params : ndarray, shape (n_comp, ...) or (1, ...)
     """
-    ret = [stat.cdf(comp, *p) for (p, comp) in zip(params, data.T)]
-    return np.asarray(ret).T
+    stat, data, params = _align_vars(stat, data, params)
+    ret = [s.cdf(comp, *p) for (s, comp, p) in zip(stat, data.T, params)]
+    return np.asarray(ret).T  # revert transpose of data if it's multi-dim.
 
 
-def _transform_to_observable(stat, data, params):
+def _transform_to_domain_of_def(stat, data, params):
     """Transform the internal representation to the observable marginals.
 
     Parameters
     ----------
-    stat : subclass of scipy.stats.rv_continuous
+    stat : scipy.stats.rv_continuous or an array of them, shape (n_comp,)
 
     data : ndarray, shape (..., n_comp)
         The components are listed in rows while realisations in columns
 
     params: ndarray, shape(n_comp, ...) or (1, ...)
     """
-    ret = [stat.ppf(comp, *p) for (p, comp) in zip(params, data.T)]
-    return np.asarray(ret).T
+    stat, data, params = _align_vars(stat, data, params)
+    ret = [s.ppf(comp, *p) for (s, comp, p) in zip(stat, data.T, params)]
+    return np.asarray(ret).T  # revert transpose of data if it's multi-dim.
 
 
 def _jacobian(stat, data, params):
-    """Estimate the parameters for marginal distributions.
+    """Calculate the product of univariate probability distribution functions.
 
     Parameters
     ----------
-    stat : array[scipy.stats.rv_continuous], shape (n_comp,)
+    stat : scipy.stats.rv_continuous or an array of them, shape (n_comp,)
 
     data : ndarray, shape (..., n_comp)
         The components are listed in rows while realisations in columns
         Elements in support of stat
 
+    params : ndarray, shape (n_comp, ...) or (1, ...)
+
     Notes
     -----
     This function is suitable for calculating the density transformation
     of copula (data = F_i^{-1}(u_i)) and marginalizer (data = x_i) too.
     """
-    ret = [stat.pdf(comp, *p) for (p, comp) in zip(params, data.T)]
-    return np.prod(ret, axis=0).T
+    stat, data, params = _align_vars(stat, data, params)
+    ret = [s.pdf(comp, *p) for (s, comp, p) in zip(stat, data.T, params)]
+    return np.prod(ret, axis=0).T  # revert transpose of data if it's multi-dim.
 
 
 def _log_jacobian(stat, data, params):
-    """Estimate the parameters for marginal distributions.
+    """Calculate the sum of log univariate probability distribution functions.
 
     Parameters
     ----------
-    stat : array[scipy.stats.rv_continuous], shape (n_comp,)
+    stat : scipy.stats.rv_continuous or an array of them, shape (n_comp,)
 
     data : ndarray, shape (..., n_comp)
         The components are listed in rows while realisations in columns
 
+    params : ndarray, shape (n_comp, ...) or (1, ...)
+
     Notes
     -----
     This function is suitable for calculating the density transformation
     of copula (data = F_i^{-1}(u_i)) and marginalizer (data = x_i) too.
     """
-    ret = [stat.logpdf(comp, *p) for (p, comp) in zip(params, data.T)]
-    return np.sum(ret, axis=0).T
+    stat, data, params = _align_vars(stat, data, params)
+    ret = [s.logpdf(comp, *p) for (s, comp, p) in zip(stat, data.T, params)]
+    return np.sum(ret, axis=0).T  # revert transpose of data if it's multi-dim.
 
 
 def nan_to_neg_inf(x):
@@ -341,12 +400,14 @@ class copula_base_gen(multi_rv_generic):
     def __init__(self, marginal_gen, joint_gen, iid_marginals, *args,
                  inv_marginals=False,
                  fit_method='exact', fit_init=None, fit_bounds=None,
-                 dtype_marginal=float, dtype_joint=float, **kwargs):
+                 dtype_marginal=float, dtype_joint=float, name=None, **kwargs):
         """
         From a common parameter set provide the separate parameters for marginal and joint distributions
 
         Parameters
         ----------
+        iid_marginals: use the same parametrization of the marginal on all axis
+        inv_marginals:
         marginal_gen: subclass of scipy._rv_continuous
         joint_gen: subclass of scipy.stats._multivariate.multi_rv_generic
         iid_marginals: bool
@@ -361,7 +422,8 @@ class copula_base_gen(multi_rv_generic):
         self.joint_gen = joint_gen
         self._dtype_marginal = None if dtype_marginal is None else np.dtype(dtype_marginal)
         self._dtype_joint = None if dtype_joint is None else np.dtype(dtype_joint)
-        self._range_check = _range_check
+        self.name = name
+        self._range_check = _no_range_check
         if fit_method == 'exact':
             _exist(joint_gen.fit, marginal_gen.fit)
         elif fit_method == 'optimize':
@@ -392,7 +454,7 @@ class copula_base_gen(multi_rv_generic):
             marginal = _fit_common_marginal(self.marginal_gen, data)
         else:
             marginal = _fit_individual_marginals(self.marginal_gen, data)
-        uniformized = _transform_to_internal(stat=self.marginal_gen, data=data, params=marginal)
+        uniformized = _transform_to_hypercube(stat=self.marginal_gen, data=data, params=marginal)
 
         joint = self.joint_gen.fit(uniformized)
         return marginal, joint
@@ -432,10 +494,10 @@ class copula_base_gen(multi_rv_generic):
         called directly; use 'logpdf' instead.
         """
         if self.inv_marginals:
-            internal = _transform_to_observable(stat=self.marginal_gen, data=x, params=marginal)
+            internal = _transform_to_domain_of_def(stat=self.marginal_gen, data=x, params=marginal)
             marginal_logpdf = -_log_jacobian(stat=self.marginal_gen, data=internal, params=marginal)
         else:
-            internal = _transform_to_internal(stat=self.marginal_gen, data=x, params=marginal)
+            internal = _transform_to_hypercube(stat=self.marginal_gen, data=x, params=marginal)
             marginal_logpdf = _log_jacobian(stat=self.marginal_gen, data=x, params=marginal)
 
         joint_logpdf = self.joint_gen.logpdf(internal, *joint)
@@ -514,9 +576,9 @@ class copula_base_gen(multi_rv_generic):
         called directly; use 'cdf' instead.
         """
         if self.inv_marginals:
-            internal = _transform_to_observable(stat=self.marginal_gen, data=x, params=marginal)
+            internal = _transform_to_domain_of_def(stat=self.marginal_gen, data=x, params=marginal)
         else:
-            internal = _transform_to_internal(stat=self.marginal_gen, data=x, params=marginal)
+            internal = _transform_to_hypercube(stat=self.marginal_gen, data=x, params=marginal)
 
         joint_cdf = self.joint_gen.cdf(internal, *joint)
 
@@ -603,9 +665,9 @@ class copula_base_gen(multi_rv_generic):
         internal = self.joint_gen.rvs(*joint, size=size, random_state=random_state)
 
         if self.inv_marginals:
-            ret = _transform_to_internal(stat=self.marginal_gen, data=internal, params=marginal)
+            ret = _transform_to_hypercube(stat=self.marginal_gen, data=internal, params=marginal)
         else:
-            ret = _transform_to_observable(stat=self.marginal_gen, data=internal, params=marginal)
+            ret = _transform_to_domain_of_def(stat=self.marginal_gen, data=internal, params=marginal)
 
         return ret
 
@@ -641,7 +703,7 @@ class copula_base_gen(multi_rv_generic):
 
 class archimedian_copula_gen(copula_base_gen):
     def __init__(self, marginal_gen, joint_gen, *args,
-                 fit_init=None, fit_bounds=None, dtype_marginal=float, dtype_joint=float, **kwargs):
+                 fit_init=None, fit_bounds=None, dtype_marginal=float, dtype_joint=float, name=None, **kwargs):
         """
         From a common parameter set provide the separate parameters for marginal and joint distributions
 
@@ -660,7 +722,8 @@ class archimedian_copula_gen(copula_base_gen):
         """
         super(archimedian_copula_gen, self).__init__(marginal_gen, joint_gen, True, *args,
                                                      fit_method='optimize', fit_init=fit_init, fit_bounds=fit_bounds,
-                                                     dtype_marginal=dtype_marginal, dtype_joint=dtype_joint, **kwargs)
+                                                     dtype_marginal=dtype_marginal, dtype_joint=dtype_joint,
+                                                     name=name, **kwargs)
         self._range_check = _unit_interval_check
 
     def _logpdf(self, x, marginal, joint):
@@ -682,11 +745,11 @@ class archimedian_copula_gen(copula_base_gen):
         """
         # Note: if dealing with generators logpdf does not necessarily exist
         if self.inv_marginals:
-            internal = _transform_to_observable(stat=self.marginal_gen, data=x, params=marginal)
+            internal = _transform_to_domain_of_def(stat=self.marginal_gen, data=x, params=marginal)
             # marginal_logpdf = -_log_jacobian(stat=self.marginal_gen, data=internal, params=marginal)
             marginal_logpdf = -np.log(_jacobian(stat=self.marginal_gen, data=internal, params=marginal))
         else:
-            internal = _transform_to_internal(stat=self.marginal_gen, data=x, params=marginal)
+            internal = _transform_to_hypercube(stat=self.marginal_gen, data=x, params=marginal)
             # marginal_logpdf = _log_jacobian(stat=self.marginal_gen, data=x, params=marginal)
             marginal_logpdf = np.log(_jacobian(stat=self.marginal_gen, data=x, params=marginal))
 
@@ -712,9 +775,9 @@ class archimedian_copula_gen(copula_base_gen):
         called directly; use 'cdf' instead.
         """
         if self.inv_marginals:
-            internal = _transform_to_observable(stat=self.marginal_gen, data=x, params=marginal)
+            internal = _transform_to_domain_of_def(stat=self.marginal_gen, data=x, params=marginal)
         else:
-            internal = _transform_to_internal(stat=self.marginal_gen, data=x, params=marginal)
+            internal = _transform_to_hypercube(stat=self.marginal_gen, data=x, params=marginal)
 
         joint_cdf = self.joint_gen.cdf(np.sum(internal, axis=-1), *joint)
 
@@ -1120,19 +1183,19 @@ _exist(my_multivariate_cov.fit)
 my_gaussian_kde = my_gaussian_kde_gen(0, name="gaussian_kde")
 
 gaussian_copula = copula_base_gen(marginal_gen=my_norm, joint_gen=my_multivariate_cov, iid_marginals=True,
-                                  fit_method='exact', dtype_joint=None, inv_marginals=True)
+                                  fit_method='exact', dtype_joint=None, inv_marginals=True, name="Gaussian")
 
 iid_gaussian_copula = copula_base_gen(marginal_gen=norm,
                                       joint_gen=gaussian_copula,
                                       iid_marginals=True, dtype_joint=None)
 
 independent_copula = archimedian_copula_gen(marginal_gen=independent_joint, joint_gen=independent_joint,
-                                            fit_init=0, fit_bounds=[0, 1], inv_marginals=True)
+                                            fit_init=0, fit_bounds=[0, 1], inv_marginals=True, name="Independent")
 clayton_copula = archimedian_copula_gen(marginal_gen=clayton_joint, joint_gen=clayton_joint,
-                                        fit_init=1, fit_bounds=[0, np.inf], inv_marginals=True)
+                                        fit_init=1, fit_bounds=[0, np.inf], inv_marginals=True, name="Clayton")
 frank_copula = archimedian_copula_gen(marginal_gen=frank_joint, joint_gen=frank_joint,
                                       fit_init=1,
-                                      fit_bounds=[-np.inf, np.inf], inv_marginals=True)
+                                      fit_bounds=[-np.inf, np.inf], inv_marginals=True, name="Frank")
 
 
 # sep_gaussian_copula = copula_gen(marginal_gen=norm, joint_gen=my_multivariate_normal,
@@ -1146,6 +1209,9 @@ frank_copula = archimedian_copula_gen(marginal_gen=frank_joint, joint_gen=frank_
 
 def make_copula(marginal, joint, iid_marginals=True):
     """
+    Set up a histogram normalization scheme for the provided marginal and
+    use one of the copulae to relate the axes.
+
     Parameters
     ----------
     marginal: Union[string['kde'], subclass[scipy.stats.rv_continuous]]
