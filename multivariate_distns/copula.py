@@ -15,8 +15,11 @@ import numpy as np
 from scipy import stats
 from scipy.stats import rv_continuous, norm, gaussian_kde
 from scipy.stats._multivariate import multivariate_normal_gen, multi_rv_generic
+from scipy.stats._distn_infrastructure import argsreduce
 from sklearn.base import TransformerMixin
 from scipy.misc import derivative
+from scipy.special import gamma
+from abc import abstractmethod
 
 
 def _exist(*unused):
@@ -111,7 +114,13 @@ def _broadcast_shapes(a, b, align_as_numpy=True):
 #  $$ c(u_1, ..., u_n) = f_nn(F_1^{-1}(u_1), ..., F_n^{-1}(u_n} / (
 #                            f_1(F_1^{-1}(u_1)) ... f_n(F_n^{-1}(u_n}) ) $$
 #
+# with $f_nn$ denoting the function $F_nn$ derived once in each of its args.
+#
 # Since the definition was given through the cdf no normalization is needed.
+# In our implementation, Archimedian copula generators are implemented as
+# `ppf` and the inverse of the generator is a `cdf` satisfying usual domain
+# of definition. Where possible the nth derivative of the cdf is given too.
+#
 # The copula distribution accounts for the correlations between variables
 # but it has to be mapped to the desired marginals $G_1, ..., G_n$ by the
 # histogram normalization method:
@@ -119,6 +128,7 @@ def _broadcast_shapes(a, b, align_as_numpy=True):
 #  $$ u_i = G_i(y_i) $$
 #
 # Obviously this is a measure change $ d u_i / d y_i = g_i(y_i) $.
+#  $$ \Prod g_i(y_i) d y_i = c(u_1, ..., u_n) \Prod d u_i $$
 #
 
 def _process_parameters(dim, marginal, joint, dtype_marginal=float, dtype_joint=float):
@@ -315,14 +325,15 @@ def _transform_to_hypercube(stat, data, params):
 
 
 def _transform_to_domain_of_def(stat, data, params):
-    """Transform the internal representation to the observable marginals.
+    """Transform the [0,1]^n hypercube representation to the observable domain.
 
     Parameters
     ----------
     stat : scipy.stats.rv_continuous or an array of them, shape (n_comp,)
 
     data : ndarray, shape (..., n_comp)
-        The components are listed in rows while realisations in columns
+        The components are listed in rows while realisations in columns.
+        Values must be in the [0,1] range.
 
     params: ndarray, shape(n_comp, ...) or (1, ...)
     """
@@ -396,9 +407,8 @@ _mj_doc_callparams_note = \
     """
 
 
-class copula_base_gen(multi_rv_generic):
+class multivariate_transform_gen(multi_rv_generic):
     def __init__(self, marginal_gen, joint_gen, iid_marginals, *args,
-                 inv_marginals=False,
                  fit_method='exact', fit_init=None, fit_bounds=None,
                  dtype_marginal=float, dtype_joint=float, name=None, **kwargs):
         """
@@ -407,7 +417,6 @@ class copula_base_gen(multi_rv_generic):
         Parameters
         ----------
         iid_marginals: use the same parametrization of the marginal on all axis
-        inv_marginals:
         marginal_gen: subclass of scipy._rv_continuous
         joint_gen: subclass of scipy.stats._multivariate.multi_rv_generic
         iid_marginals: bool
@@ -417,7 +426,6 @@ class copula_base_gen(multi_rv_generic):
         **kwargs: keyword arguments for  multi_rv_generic
         """
         self.iid_marginals = bool(iid_marginals)
-        self.inv_marginals = bool(inv_marginals)
         self.marginal_gen = marginal_gen
         self.joint_gen = joint_gen
         self._dtype_marginal = None if dtype_marginal is None else np.dtype(dtype_marginal)
@@ -434,31 +442,9 @@ class copula_base_gen(multi_rv_generic):
         else:
             raise ValueError('fit_method must be one of the following: exact, optimize')
         self._fit_method = fit_method
-        super(copula_base_gen, self).__init__(*args, **kwargs)
+        super(multivariate_transform_gen, self).__init__(*args, **kwargs)
 
-    def _exact_fit(self, data, loc=0, scale=1):
-        """
-        Fit both the parameters of the marginals and the joint distribution one after another
-
-        Parameters
-        ----------
-        data : ndarray, shape (..., n_comp)
-            Data samples, with the last axis of `data` denoting the components.
-
-        Notes
-        -----
-        This function uses the fit capability of underlying distributions.
-        TODO: create a wrapper class for distributions that do not have fit.
-        """
-        if self.iid_marginals:
-            marginal = _fit_common_marginal(self.marginal_gen, data)
-        else:
-            marginal = _fit_individual_marginals(self.marginal_gen, data)
-        uniformized = _transform_to_hypercube(stat=self.marginal_gen, data=data, params=marginal)
-
-        joint = self.joint_gen.fit(uniformized)
-        return marginal, joint
-
+    @abstractmethod
     def fit(self, data, loc=0, scale=1):
         """
         Fit both the parameters of the marginals and the joint distribution
@@ -472,10 +458,9 @@ class copula_base_gen(multi_rv_generic):
         -----
         One needs to specify at construction time how to perform fit.
         """
-        marginal, joint = self._exact_fit(data)
+        pass
 
-        return marginal, joint
-
+    @abstractmethod
     def _logpdf(self, x, marginal, joint):
         """
         Parameters
@@ -483,7 +468,7 @@ class copula_base_gen(multi_rv_generic):
         x : ndarray
             Points at which to evaluate the log of the probability
             density function
-        marginal : array_like, shape (n_comp, n_param) or (n_param,)
+        marginal : array_like, shape (n_comp, n_param) or (1, n_param)
             Parameters of the marginal distribution(s)
         joint : tuple, array_like
             Parameters of the joint distribution
@@ -493,17 +478,7 @@ class copula_base_gen(multi_rv_generic):
         As this function does no argument checking, it should not be
         called directly; use 'logpdf' instead.
         """
-        if self.inv_marginals:
-            internal = _transform_to_domain_of_def(stat=self.marginal_gen, data=x, params=marginal)
-            marginal_logpdf = -_log_jacobian(stat=self.marginal_gen, data=internal, params=marginal)
-        else:
-            internal = _transform_to_hypercube(stat=self.marginal_gen, data=x, params=marginal)
-            marginal_logpdf = _log_jacobian(stat=self.marginal_gen, data=x, params=marginal)
-
-        joint_logpdf = self.joint_gen.logpdf(internal, *joint)
-
-        # TODO: make this sanitization optional (it was introduced due to values much off the centre of mv normal)
-        return np.nan_to_num(nan_to_neg_inf(joint_logpdf + marginal_logpdf))
+        pass
 
     def logpdf(self, x, marginal, joint):
         """
@@ -559,13 +534,14 @@ class copula_base_gen(multi_rv_generic):
         ret = np.exp(self._logpdf(x, marginal, joint))
         return ret
 
+    @abstractmethod
     def _cdf(self, x, marginal, joint):
         """
         Parameters
         ----------
         x : ndarray
             Points at which to evaluate the cumulative distribution function.
-        marginal : array_like, shape (n_comp, n_param) or (n_param,)
+        marginal : array_like, shape (n_comp, n_param) or (1, n_param)
             Parameters of the marginal distribution(s)
         joint : tuple, array_like
             Parameters of the joint distribution
@@ -575,14 +551,7 @@ class copula_base_gen(multi_rv_generic):
         As this function does no argument checking, it should not be
         called directly; use 'cdf' instead.
         """
-        if self.inv_marginals:
-            internal = _transform_to_domain_of_def(stat=self.marginal_gen, data=x, params=marginal)
-        else:
-            internal = _transform_to_hypercube(stat=self.marginal_gen, data=x, params=marginal)
-
-        joint_cdf = self.joint_gen.cdf(internal, *joint)
-
-        return joint_cdf
+        pass
 
     def logcdf(self, x, marginal, joint):
         """
@@ -638,6 +607,7 @@ class copula_base_gen(multi_rv_generic):
         ret = self._cdf(x, marginal, joint)
         return ret
 
+    @abstractmethod
     def _rvs(self, marginal, joint, size, random_state):
         """
         Parameters
@@ -662,14 +632,7 @@ class copula_base_gen(multi_rv_generic):
         As this function does no argument checking, it should not be
         called directly; use 'rvs' instead.
         """
-        internal = self.joint_gen.rvs(*joint, size=size, random_state=random_state)
-
-        if self.inv_marginals:
-            ret = _transform_to_hypercube(stat=self.marginal_gen, data=internal, params=marginal)
-        else:
-            ret = _transform_to_domain_of_def(stat=self.marginal_gen, data=internal, params=marginal)
-
-        return ret
+        pass
 
     def rvs(self, marginal, joint, size=1, random_state=None):
         """
@@ -698,6 +661,238 @@ class copula_base_gen(multi_rv_generic):
 
         ret = self._rvs(marginal, joint, size, random_state)
 
+        return ret
+
+
+class histogram_normalization_gen(multivariate_transform_gen):
+    def __init__(self, marginal_gen, joint_gen, iid_marginals, *args,
+                 fit_method='exact', fit_init=None, fit_bounds=None,
+                 dtype_marginal=float, dtype_joint=float, name=None, **kwargs):
+        """
+        From a common parameter set provide the separate parameters for marginal and joint distributions
+
+        Parameters
+        ----------
+        marginal_gen: subclass of scipy._rv_continuous
+        joint_gen: subclass of scipy.stats._multivariate.multi_rv_generic
+        iid_marginals: bool, use the same parametrization of the marginal on all axis
+        *args: arguments for multi_rv_generic
+        dtype_marginal: Union[Type, np.dtype]
+        dtype_joint: Union[Type, np.dtype]
+        **kwargs: keyword arguments for  multi_rv_generic
+        """
+        self._range_check = _no_range_check
+        if fit_method == 'exact':
+            _exist(joint_gen.fit, marginal_gen.fit)
+        elif fit_method == 'optimize':
+            if fit_init is None:
+                raise ValueError('Initial values to fit must be provided')
+            self._fit_init = fit_init
+            self._fit_bounds = fit_bounds
+        else:
+            raise ValueError('fit_method must be one of the following: exact, optimize')
+        self._fit_method = fit_method
+        super(histogram_normalization_gen, self).__init__(marginal_gen, joint_gen, iid_marginals, *args,
+                                                          dtype_marginal=dtype_marginal, dtype_joint=dtype_joint,
+                                                          name=name, **kwargs)
+
+    def fit(self, data, loc=0, scale=1):
+        """
+        Fit both the parameters of the marginals and the joint distribution one after another
+
+        Parameters
+        ----------
+        data : ndarray, shape (..., n_comp)
+            Data samples, with the last axis of `data` denoting the components.
+
+        Notes
+        -----
+        This function uses the fit capability of underlying distributions.
+        TODO: create a wrapper class for distributions that do not have fit.
+        """
+        if self.iid_marginals:
+            marginal = _fit_common_marginal(self.marginal_gen, data)
+        else:
+            marginal = _fit_individual_marginals(self.marginal_gen, data)
+        uniformized = _transform_to_hypercube(stat=self.marginal_gen, data=data, params=marginal)
+
+        joint = self.joint_gen.fit(uniformized)
+        return marginal, joint
+
+    def _logpdf(self, x, marginal, joint):
+        """
+        Parameters
+        ----------
+        x : ndarray
+            Points at which to evaluate the log of the probability
+            density function
+        marginal : array_like, shape (n_comp, n_param) or (n_param,)
+            Parameters of the marginal distribution(s)
+        joint : tuple, array_like
+            Parameters of the joint distribution
+
+        Notes
+        -----
+        As this function does no argument checking, it should not be
+        called directly; use 'logpdf' instead.
+        """
+        uniformized = _transform_to_hypercube(stat=self.marginal_gen, data=x, params=marginal)
+        marginal_logpdf = _log_jacobian(stat=self.marginal_gen, data=x, params=marginal)
+        joint_logpdf = self.joint_gen.logpdf(uniformized, *joint)
+
+        # TODO: make this sanitization optional (it was introduced due to values much off the centre of mv normal)
+        return np.nan_to_num(nan_to_neg_inf(joint_logpdf + marginal_logpdf))
+
+    def _cdf(self, x, marginal, joint):
+        """
+        Parameters
+        ----------
+        x : ndarray
+            Points at which to evaluate the cumulative distribution function.
+        marginal : array_like, shape (n_comp, n_param) or (n_param,)
+            Parameters of the marginal distribution(s)
+        joint : tuple, array_like
+            Parameters of the joint distribution
+
+        Notes
+        -----
+        As this function does no argument checking, it should not be
+        called directly; use 'cdf' instead.
+        """
+        uniformized = _transform_to_hypercube(stat=self.marginal_gen, data=x, params=marginal)
+        joint_cdf = self.joint_gen.cdf(uniformized, *joint)
+        return joint_cdf
+
+    def _rvs(self, marginal, joint, size, random_state):
+        """
+        Parameters
+        ----------
+        marginal : array_like, shape (n_comp, n_param) or (n_param,)
+            Parameters of the marginal distribution(s)
+        joint : tuple
+            Parameters of the joint distribution
+        size : int or tuple
+            Number of `N` dimensional random variates to generate.
+        random_state : numpy.random_state
+            Random state instance
+
+        Returns
+        -------
+        rvs : ndarray or scalar
+            Random variates of size (`size`, `N`), where `N` is the
+            dimension of the random variable.
+
+        Notes
+        -----
+        As this function does no argument checking, it should not be
+        called directly; use 'rvs' instead.
+        """
+        uniformized = self.joint_gen.rvs(*joint, size=size, random_state=random_state)
+        ret = _transform_to_domain_of_def(stat=self.marginal_gen, data=uniformized, params=marginal)
+        return ret
+
+
+class copula_base_gen(multivariate_transform_gen):
+    def __init__(self, marginal_gen, joint_gen, iid_marginals, *args,
+                 fit_method='exact', fit_init=None, fit_bounds=None,
+                 dtype_marginal=float, dtype_joint=float, name=None, **kwargs):
+        """
+        From a common parameter set provide the separate parameters for marginal and joint distributions
+
+        Parameters
+        ----------
+        marginal_gen: subclass of scipy._rv_continuous
+        joint_gen: subclass of scipy.stats._multivariate.multi_rv_generic
+        *args: arguments for multi_rv_generic
+        dtype_marginal: Union[Type, np.dtype]
+        dtype_joint: Union[Type, np.dtype]
+        **kwargs: keyword arguments for  multi_rv_generic
+        """
+        self._range_check = _unit_interval_check
+        if fit_method == 'exact':
+            _exist(joint_gen.fit, marginal_gen.fit)
+        elif fit_method == 'optimize':
+            if fit_init is None:
+                raise ValueError('Initial values to fit must be provided')
+            self._fit_init = fit_init
+            self._fit_bounds = fit_bounds
+        else:
+            raise ValueError('fit_method must be one of the following: exact, optimize')
+        self._fit_method = fit_method
+        super(copula_base_gen, self).__init__(marginal_gen, joint_gen, iid_marginals, *args,
+                                              dtype_marginal=dtype_marginal, dtype_joint=dtype_joint,
+                                              name=name, **kwargs)
+
+    def _logpdf(self, x, marginal, joint):
+        """
+        Parameters
+        ----------
+        x : ndarray
+            Points at which to evaluate the log of the probability
+            density function
+        marginal : array_like, shape (n_comp, n_param) or (n_param,)
+            Parameters of the marginal distribution(s)
+        joint : tuple, array_like
+            Parameters of the joint distribution
+
+        Notes
+        -----
+        As this function does no argument checking, it should not be
+        called directly; use 'logpdf' instead.
+        """
+        internal = _transform_to_domain_of_def(stat=self.marginal_gen, data=x, params=marginal)
+        marginal_logpdf = -_log_jacobian(stat=self.marginal_gen, data=internal, params=marginal)
+        joint_logpdf = self.joint_gen.logpdf(internal, *joint)
+
+        # TODO: make this sanitization optional (it was introduced due to values much off the centre of mv normal)
+        return np.nan_to_num(nan_to_neg_inf(joint_logpdf + marginal_logpdf))
+
+    def _cdf(self, x, marginal, joint):
+        """
+        Parameters
+        ----------
+        x : ndarray
+            Points at which to evaluate the cumulative distribution function.
+        marginal : array_like, shape (n_comp, n_param) or (n_param,)
+            Parameters of the marginal distribution(s)
+        joint : tuple, array_like
+            Parameters of the joint distribution
+
+        Notes
+        -----
+        As this function does no argument checking, it should not be
+        called directly; use 'cdf' instead.
+        """
+        internal = _transform_to_domain_of_def(stat=self.marginal_gen, data=x, params=marginal)
+        joint_cdf = self.joint_gen.cdf(internal, *joint)
+        return joint_cdf
+
+    def _rvs(self, marginal, joint, size, random_state):
+        """
+        Parameters
+        ----------
+        marginal : array_like, shape (n_comp, n_param) or (n_param,)
+            Parameters of the marginal distribution(s)
+        joint : tuple
+            Parameters of the joint distribution
+        size : int or tuple
+            Number of `N` dimensional random variates to generate.
+        random_state : numpy.random_state
+            Random state instance
+
+        Returns
+        -------
+        rvs : ndarray or scalar
+            Random variates of size (`size`, `N`), where `N` is the
+            dimension of the random variable.
+
+        Notes
+        -----
+        As this function does no argument checking, it should not be
+        called directly; use 'rvs' instead.
+        """
+        internal = self.joint_gen.rvs(*joint, size=size, random_state=random_state)
+        ret = _transform_to_hypercube(stat=self.marginal_gen, data=internal, params=marginal)
         return ret
 
 
@@ -744,17 +939,13 @@ class archimedian_copula_gen(copula_base_gen):
         called directly; use 'logpdf' instead.
         """
         # Note: if dealing with generators logpdf does not necessarily exist
-        if self.inv_marginals:
-            internal = _transform_to_domain_of_def(stat=self.marginal_gen, data=x, params=marginal)
-            # marginal_logpdf = -_log_jacobian(stat=self.marginal_gen, data=internal, params=marginal)
-            marginal_logpdf = -np.log(_jacobian(stat=self.marginal_gen, data=internal, params=marginal))
-        else:
-            internal = _transform_to_hypercube(stat=self.marginal_gen, data=x, params=marginal)
-            # marginal_logpdf = _log_jacobian(stat=self.marginal_gen, data=x, params=marginal)
-            marginal_logpdf = np.log(_jacobian(stat=self.marginal_gen, data=x, params=marginal))
+        internal = _transform_to_domain_of_def(stat=self.marginal_gen, data=x, params=marginal)
+        # marginal_logpdf = -_log_jacobian(stat=self.marginal_gen, data=internal, params=marginal)
+        marginal_logpdf = -np.log(_jacobian(stat=self.marginal_gen, data=internal, params=marginal))
 
         dim = internal.shape[-1]
-        joint_pdf = derivative(lambda x0: self.joint_gen.cdf(x0, *joint), np.sum(internal, axis=-1), dx=1e-6, n=dim)
+        # joint_pdf = derivative(lambda x0: self.joint_gen.cdf(x0, *joint), np.sum(internal, axis=-1), dx=1e-6, n=dim)
+        joint_pdf = self.joint_gen.cdfd(np.sum(internal, axis=-1), *joint, n=dim)
 
         return np.log(joint_pdf) + marginal_logpdf
 
@@ -774,13 +965,8 @@ class archimedian_copula_gen(copula_base_gen):
         As this function does no argument checking, it should not be
         called directly; use 'cdf' instead.
         """
-        if self.inv_marginals:
-            internal = _transform_to_domain_of_def(stat=self.marginal_gen, data=x, params=marginal)
-        else:
-            internal = _transform_to_hypercube(stat=self.marginal_gen, data=x, params=marginal)
-
+        internal = _transform_to_domain_of_def(stat=self.marginal_gen, data=x, params=marginal)
         joint_cdf = self.joint_gen.cdf(np.sum(internal, axis=-1), *joint)
-
         return joint_cdf
 
     def _rvs(self, marginal, joint, size, random_state):
@@ -810,7 +996,7 @@ class archimedian_copula_gen(copula_base_gen):
         raise NotImplementedError
 
 
-class my_norm_gen(type(norm)):
+class passthru_norm_gen(type(norm)):
     """Example extension to the multivariate normal distribution without
        ML fit capability"""
 
@@ -835,7 +1021,7 @@ class my_norm_gen(type(norm)):
         return 0, 1
 
 
-class my_multivariate_normal_gen(multivariate_normal_gen):
+class multivariate_cov_only_normal_gen(multivariate_normal_gen):
     """Example extension to the multivariate normal distribution with
        ML fit capability"""
 
@@ -868,7 +1054,7 @@ class my_multivariate_normal_gen(multivariate_normal_gen):
         X = np.array(X, ndmin=1)
         mn = np.mean(X, axis=0)
         if not self._fit_mean:
-            mn = mn * 0.0
+            mn = np.zeros_like(mn)
         co = np.cov(X, rowvar=False)
         return mn, co
 
@@ -1023,32 +1209,93 @@ def invert_cdf(stat):
 class independent_generator_gen(rv_continuous):
     def _argcheck(self, *args):
         """Default check for correct values on args and keywords.
+class archimedian_generator_gen(rv_continuous):
+    # The "generator of the copula" phi: [0,1] --> [0,inf)
+    # This is a strictly decreasing function such that phi(1)=0 and
+    # it is applied to the marginal distribution.
+    # def _ppf(self, q, *args):
+    # archimedian_generator_gen._ppf.__doc__ += \
+    #     "This is the generator of the Archimedian copula"
 
         Returns condition array of 1's where arguments are correct and
          0's where they are not.
+    # The inverse of the generator phi^{-1}: [0,inf) --> [0,1]
+    # This applied to the sum of the generators valid arguments fall into
+    # [0, phi(0)]. Outside this range the pseudoinverse is defined as zero.
+    # def _cdf(self, x, theta):
+    # archimedian_generator_gen._cdf.__doc__ += \
+    #     "This is the inverse of the generator of the Archimedian copula"
 
         """
         cond = 1
         for arg in args:
             cond = np.logical_and(cond, (~np.isnan(arg)))
         return cond
+    # The nth derivative of the inverse of the generator
+    def _cdfd(self, x, *args, n=1):
+        return derivative(lambda x0: self._cdf(x0, *args), x, dx=1e-6, n=n)
 
     # Marginal of the univariate distribution used inside the copula
     def _ppf(self, x, theta):
         ret = np.exp(x)
         return ret
+    # def _logcdfd(self, x, *args, n=1):
+    #    return np.log(self._cdfd(x, *args, n=n))
 
     # The so-called generator of the copula is the inverse of the marginal's cdf
     def _cdf(self, x, theta):
         ret = np.log(x)
         return ret
+    def cdfd(self, x, *args, n=1, **kwds):
+        """
+        nth derivative of the cumulative distribution function of the given RV.
 
     def _pdf(self, x, theta):
         ret = 1.0 / x
         return ret
+        Parameters
+        ----------
+        x : array_like
+            quantiles
+        arg1, arg2, arg3,... : array_like
+            The shape parameter(s) for the distribution (see docstring of the
+            instance object for more information)
+        loc : array_like, optional
+            location parameter (default=0)
+        scale : array_like, optional
+            scale parameter (default=1)
 
+        Returns
+        -------
+        cdf : ndarray
+            nth derivative of the cumulative distribution function evaluated at `x`
 
 class independent_joint_gen(rv_continuous):
+        """
+        # Based on scipy.stats._distn_infrastructure.rv_generic.cdf
+        args, loc, scale = self._parse_args(*args, **kwds)
+        n = int(n)
+        if n < 1:
+            raise ValueError('Only positive integer is accepted as order of derivative.')
+        x, loc, scale = map(np.asarray, (x, loc, scale))
+        args = tuple(map(np.asarray, args))
+        dtyp = np.find_common_type([x.dtype, np.float64], [])
+        x = np.asarray((x - loc) / scale, dtype=dtyp)
+        cond0 = self._argcheck(*args) & (scale > 0)
+        cond1 = self._open_support_mask(x) & (scale > 0)
+        cond2 = (x >= self.b) & cond0
+        cond = cond0 & cond1
+        output = np.zeros(np.shape(cond), dtyp)
+        np.place(output, (1 - cond0) + np.isnan(x), self.badvalue)
+        np.place(output, cond2, 1.0)
+        if np.any(cond):  # call only if at least 1 entry
+            goodargs = argsreduce(cond, *((x,) + args))
+            np.place(output, cond, self._cdfd(*goodargs, n=n))
+        if output.ndim == 0:
+            return output[()]
+        return output
+
+
     def _argcheck(self, *args):
         """Default check for correct values on args and keywords.
 
@@ -1081,31 +1328,15 @@ independent_generator = independent_generator_gen(a=0.0, b=1.0, name='indep')
 independent_joint = independent_joint_gen(name='indep')
 
 
-class clayton_generator_gen(rv_continuous):
-    # Marginal of the univariate distribution used inside the copula
-    def _ppf(self, x, theta):
-        ret = np.power(theta * x + 1, -1.0 / theta)
-        return ret
-
-    # The so-called generator of the copula is the inverse of the marginal's cdf
-    def _cdf(self, x, theta):
-        ret = 1.0 / theta * (np.power(x, -theta) - 1)
-        return ret
-
-    # def _pdf(self, x, theta):
-    #    ret = -np.power(x, -theta - 1)
-    #    return ret
 
 
-class clayton_joint_gen(rv_continuous):
-    # Marginal of the univariate distribution used inside the copula
-    def _cdf(self, x, theta):
-        ret = np.power(theta * x + 1, -1.0 / theta)
-        return ret
-
-    # The so-called generator of the copula is the inverse of the marginal's cdf
+class clayton_generator_gen(archimedian_generator_gen):
     def _ppf(self, x, theta):
         ret = 1.0 / theta * (np.power(x, -theta) - 1)
+        return ret
+
+    def _cdf(self, x, theta):
+        ret = np.power(theta * x + 1, -1.0 / theta)
         return ret
 
     def _pdf(self, x, theta):
@@ -1113,89 +1344,54 @@ class clayton_joint_gen(rv_continuous):
         # raise ValueError('This is not a valid distribution! We only use it as a convenient framework.')
         return ret
 
-
-clayton_generator = clayton_generator_gen(a=0.0, b=1.0, name='clayton')
-# clayton_joint = invert_cdf(clayton_generator_gen(name='clayton'))
-clayton_joint = clayton_joint_gen(name='clayton')
-
-
-class frank_generator_gen(rv_continuous):
-    # Marginal of the univariate distribution used inside the copula
-    def _ppf(self, x, theta):
-        ret = -1.0 / theta * np.log(np.exp(-x) * (np.exp(-theta) - 1) + 1)
-        return ret
-
-    # The so-called generator of the copula is the inverse of the marginal's cdf
-    def _cdf(self, x, theta):
-        ret = -np.log((np.exp(-theta * x) - 1) / (np.exp(-theta) - 1))
-        return ret
-
-    # def _pdf(self, x, theta):
-    #    ret = theta * (np.exp(-theta) - 1) / (1 - np.exp(theta * x))
-    #    return ret
-
-
-frank_generator = frank_generator_gen(a=0.0, b=1.0, name='frank')
-frank_joint = invert_cdf(frank_generator_gen(name='frank'))
-
-# class clayton_copula_gen(copula_base_gen):
-#     def _cdf(self, x, marginal, joint):
-#         theta = marginal[:, 0]
-#         return np.maximum(np.power(np.sum(np.power(x, -theta), -1) - 1, -1.0 / theta[0]), 0)
-#
 #     def _logpdf(self, x, marginal, joint):
 #         dim = np.prod(marginal.shape)
 #         theta = joint[0]
 #         return ((-1.0 / theta - dim) * np.log(np.sum(np.power(x, -theta), -1) - 1) +
 #                 (-theta - 1) * np.sum(np.log(x), -1))
 #         # TODO: ln gamma missing
-#
-#
-# class frank_copula_gen(copula_base_gen):
-#     def _cdf(self, x, marginal, joint):
-#         theta = marginal[:, 0]
-#         return -1.0 / theta * np.log(1 + np.prod(np.exp(-theta * x) - 1, -1) / (np.exp(-theta[0]) - 1))
-#
-#     def _logpdf(self, x, marginal, joint):
-#         raise NotImplementedError
-#
-#
-# class independent_copula_gen(copula_base_gen):
-#     def _cdf(self, x, marginal, joint):
-#         return np.prod(np.clip(x, 0, 1), -1)
-#
-#     def _logpdf(self, x, marginal, joint):
-#         in_support = np.logical_and(0 <= x, x <= 1)
-#         with np.errstate(divide='ignore'):
-#             ret = np.log(np.all(in_support, -1).astype(float))
-#         return ret
 
 
-my_norm = my_norm_gen()
-_exist(my_norm.fit)
+clayton_generator = clayton_generator_gen(name='indep')
 
-gaussian_generator = invert_cdf(my_norm_gen(a=0.0, b=1.0, name='invgauss'))
 
-my_multivariate_normal = my_multivariate_normal_gen()
-my_multivariate_cov = my_multivariate_normal_gen(fit_mean=False)
-_exist(my_multivariate_cov.fit)
+class frank_generator_gen(archimedian_generator_gen):
+    def _ppf(self, x, theta):
+        ret = -np.log(np.expm1(-theta * x) / np.expm1(-theta))
+        return ret
+
+    def _cdf(self, x, theta):
+        ret = -1.0 / theta * np.log1p(np.exp(-x) * np.expm1(-theta))
+        return ret
+
+
+frank_generator = frank_generator_gen(name='frank')
+
+passthru_norm = passthru_norm_gen()
+# _exist(passthru_norm.fit)
+
+gaussian_generator = invert_cdf(passthru_norm_gen(a=0.0, b=1.0, name='invgauss'))
+
+multivariate_cov_only_normal = multivariate_cov_only_normal_gen(fit_mean=False)
+# _exist(multivariate_cov_only_normal.fit)
 
 my_gaussian_kde = my_gaussian_kde_gen(0, name="gaussian_kde")
 
-gaussian_copula = copula_base_gen(marginal_gen=my_norm, joint_gen=my_multivariate_cov, iid_marginals=True,
-                                  fit_method='exact', dtype_joint=None, inv_marginals=True, name="Gaussian")
+gaussian_copula = copula_base_gen(marginal_gen=passthru_norm, joint_gen=multivariate_cov_only_normal,
+                                  iid_marginals=True,
+                                  fit_method='exact', dtype_joint=None, name="Gaussian")
 
 iid_gaussian_copula = copula_base_gen(marginal_gen=norm,
                                       joint_gen=gaussian_copula,
                                       iid_marginals=True, dtype_joint=None)
 
-independent_copula = archimedian_copula_gen(marginal_gen=independent_joint, joint_gen=independent_joint,
-                                            fit_init=0, fit_bounds=[0, 1], inv_marginals=True, name="Independent")
-clayton_copula = archimedian_copula_gen(marginal_gen=clayton_joint, joint_gen=clayton_joint,
-                                        fit_init=1, fit_bounds=[0, np.inf], inv_marginals=True, name="Clayton")
-frank_copula = archimedian_copula_gen(marginal_gen=frank_joint, joint_gen=frank_joint,
+independent_copula = archimedian_copula_gen(marginal_gen=independent_generator, joint_gen=independent_generator,
+                                            fit_init=0, fit_bounds=[0, 1], name="Independent")
+clayton_copula = archimedian_copula_gen(marginal_gen=clayton_generator, joint_gen=clayton_generator,
+                                        fit_init=1, fit_bounds=[0, np.inf], name="Clayton")
+frank_copula = archimedian_copula_gen(marginal_gen=frank_generator, joint_gen=frank_generator,
                                       fit_init=1,
-                                      fit_bounds=[-np.inf, np.inf], inv_marginals=True, name="Frank")
+                                      fit_bounds=[-np.inf, np.inf], name="Frank")
 
 
 # sep_gaussian_copula = copula_gen(marginal_gen=norm, joint_gen=my_multivariate_normal,
@@ -1243,7 +1439,7 @@ def make_copula(marginal, joint, iid_marginals=True):
     joint_gen = allowed_joint[joint]
 
     iid_marginals = bool(iid_marginals)
-    return copula_base_gen(marginal_gen=marginal_gen,
-                           joint_gen=joint_gen,
-                           iid_marginals=iid_marginals,
-                           **tuning)
+    return multivariate_transform_gen(marginal_gen=marginal_gen,
+                                      joint_gen=joint_gen,
+                                      iid_marginals=iid_marginals,
+                                      **tuning)
