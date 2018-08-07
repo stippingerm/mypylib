@@ -18,7 +18,7 @@ from scipy.stats._multivariate import multivariate_normal_gen, multi_rv_generic
 from scipy.stats._distn_infrastructure import argsreduce
 from sklearn.base import TransformerMixin
 from scipy.misc import derivative
-from scipy.special import gamma
+from scipy.special import gamma, gammaln
 from abc import abstractmethod
 
 
@@ -1206,9 +1206,6 @@ def invert_cdf(stat):
     return stat
 
 
-class independent_generator_gen(rv_continuous):
-    def _argcheck(self, *args):
-        """Default check for correct values on args and keywords.
 class archimedian_generator_gen(rv_continuous):
     # The "generator of the copula" phi: [0,1] --> [0,inf)
     # This is a strictly decreasing function such that phi(1)=0 and
@@ -1217,8 +1214,6 @@ class archimedian_generator_gen(rv_continuous):
     # archimedian_generator_gen._ppf.__doc__ += \
     #     "This is the generator of the Archimedian copula"
 
-        Returns condition array of 1's where arguments are correct and
-         0's where they are not.
     # The inverse of the generator phi^{-1}: [0,inf) --> [0,1]
     # This applied to the sum of the generators valid arguments fall into
     # [0, phi(0)]. Outside this range the pseudoinverse is defined as zero.
@@ -1226,33 +1221,19 @@ class archimedian_generator_gen(rv_continuous):
     # archimedian_generator_gen._cdf.__doc__ += \
     #     "This is the inverse of the generator of the Archimedian copula"
 
-        """
-        cond = 1
-        for arg in args:
-            cond = np.logical_and(cond, (~np.isnan(arg)))
-        return cond
     # The nth derivative of the inverse of the generator
     def _cdfd(self, x, *args, n=1):
-        return derivative(lambda x0: self._cdf(x0, *args), x, dx=1e-6, n=n)
+        # min order = n - (n % 2) + 3
+        order = 2 * n + 1
+        return derivative(lambda x0: self._cdf(x0, *args), x, dx=1e-2, n=n, order=order)
 
-    # Marginal of the univariate distribution used inside the copula
-    def _ppf(self, x, theta):
-        ret = np.exp(x)
-        return ret
     # def _logcdfd(self, x, *args, n=1):
     #    return np.log(self._cdfd(x, *args, n=n))
 
-    # The so-called generator of the copula is the inverse of the marginal's cdf
-    def _cdf(self, x, theta):
-        ret = np.log(x)
-        return ret
     def cdfd(self, x, *args, n=1, **kwds):
         """
         nth derivative of the cumulative distribution function of the given RV.
 
-    def _pdf(self, x, theta):
-        ret = 1.0 / x
-        return ret
         Parameters
         ----------
         x : array_like
@@ -1270,7 +1251,6 @@ class archimedian_generator_gen(rv_continuous):
         cdf : ndarray
             nth derivative of the cumulative distribution function evaluated at `x`
 
-class independent_joint_gen(rv_continuous):
         """
         # Based on scipy.stats._distn_infrastructure.rv_generic.cdf
         args, loc, scale = self._parse_args(*args, **kwds)
@@ -1290,12 +1270,27 @@ class independent_joint_gen(rv_continuous):
         np.place(output, cond2, 1.0)
         if np.any(cond):  # call only if at least 1 entry
             goodargs = argsreduce(cond, *((x,) + args))
-            np.place(output, cond, self._cdfd(*goodargs, n=n))
+            vec_cdfd = np.vectorize(self._cdfd)
+            np.place(output, cond, vec_cdfd(*goodargs, n=n))
         if output.ndim == 0:
             return output[()]
         return output
 
 
+def _test_cdfd(stat, x, *args, n=1):
+    if stat._cdfd.__code__ is archimedian_generator_gen._cdfd.__code__:
+        return ValueError('Numerically differentiating method is not overridden with analytic one.')
+    x, *args, n = np.atleast_1d(x, *args, n)
+    ana = stat._cdfd(x, *args, n=n)
+    vecdiff = np.vectorize(archimedian_generator_gen._cdfd)
+    num = vecdiff(stat, x, *args, n=n)
+    good = np.allclose(ana, num)
+    if not good:
+        print('Ana: %s\nNum: %s\n' % (ana, num))
+    return good
+
+
+class independent_generator_gen(archimedian_generator_gen):
     def _argcheck(self, *args):
         """Default check for correct values on args and keywords.
 
@@ -1308,26 +1303,39 @@ class independent_joint_gen(rv_continuous):
             cond = np.logical_and(cond, (~np.isnan(arg)))
         return cond
 
-    # Marginal of the univariate distribution used inside the copula
-    def _cdf(self, x, theta):
-        ret = np.exp(x)
+    def _ppf(self, x):
+        ret = -np.log(x)
         return ret
 
-    # The so-called generator of the copula is the inverse of the marginal's cdf
-    def _ppf(self, x, theta):
-        ret = np.log(x)
+    def _cdf(self, x):
+        ret = np.exp(-x)
         return ret
 
-    def _pdf(self, x, theta):
-        ret = np.exp(x)
+    def _pdf(self, x):
+        ret = -np.exp(-x)
         return ret
 
+    def _cdfd(self, x, n):
+        ret = np.power(-1, n % 2) * np.exp(-x)
+        return ret
 
-independent_generator = independent_generator_gen(a=0.0, b=1.0, name='indep')
-# independent_joint = invert_cdf(independent_generator_gen(name='indep'))
-independent_joint = independent_joint_gen(name='indep')
+    # def _logcdfd(self, x, n):
+    #    ret = np.power(-1, n), np.log(-x)
+    #    return ret
 
 
+independent_generator = independent_generator_gen(name='indep')
+
+
+# _test_cdfd(independent_generator, [0.1, 5, 3], n=[5, 2, 1])
+
+def _log_prod_arithmetic_progression(a, d, n):
+    """The product of the members of a finite arithmetic progression
+    with an initial element a1, common differences d, and n elements
+    in total is determined in a closed expression"""
+    # https://en.wikipedia.org/wiki/Arithmetic_progression#Product
+    frac = np.true_divide(a, d)
+    return n * np.log(d) + gammaln(frac + n) - gammaln(frac)
 
 
 class clayton_generator_gen(archimedian_generator_gen):
@@ -1340,19 +1348,35 @@ class clayton_generator_gen(archimedian_generator_gen):
         return ret
 
     def _pdf(self, x, theta):
-        ret = -1.0 / theta * np.power(theta * x + 1, -1.0 / theta - 1)
-        # raise ValueError('This is not a valid distribution! We only use it as a convenient framework.')
+        ret = -np.power(theta * x + 1, -1.0 / theta - 1)
         return ret
 
-#     def _logpdf(self, x, marginal, joint):
-#         dim = np.prod(marginal.shape)
-#         theta = joint[0]
-#         return ((-1.0 / theta - dim) * np.log(np.sum(np.power(x, -theta), -1) - 1) +
-#                 (-theta - 1) * np.sum(np.log(x), -1))
-#         # TODO: ln gamma missing
+    def _cdfd(self, x, theta, n=1):
+        fact = np.exp(_log_prod_arithmetic_progression(1, theta, n))
+        ret = fact * np.power(1 + theta * x, -n - 1. / theta) * np.power(-1, n % 2)
+        return ret
 
 
-clayton_generator = clayton_generator_gen(name='indep')
+clayton_generator = clayton_generator_gen(name='clayton')
+# _test_cdfd(clayton_generator, [0.1, 5, 3], 2.2, n=[5, 2, 1])
+# _test_cdfd(clayton_generator, [0.1, 5, 3], 1.5, n=[5, 2, 1])
+
+
+class gumbel_generator_gen(archimedian_generator_gen):
+    def _ppf(self, x, theta):
+        ret = np.power(-np.log(x), -theta)
+        return ret
+
+    def _cdf(self, x, theta):
+        ret = np.exp(-np.power(x, 1. / theta))
+        return ret
+
+    def _pdf(self, x, theta):
+        ret = -np.power(x, 1./theta-1) * np.exp(-np.power(x, 1. / theta))
+        return ret
+
+
+gumbel_generator = gumbel_generator_gen(name='gumbel')
 
 
 class frank_generator_gen(archimedian_generator_gen):
@@ -1366,6 +1390,7 @@ class frank_generator_gen(archimedian_generator_gen):
 
 
 frank_generator = frank_generator_gen(name='frank')
+
 
 passthru_norm = passthru_norm_gen()
 # _exist(passthru_norm.fit)
