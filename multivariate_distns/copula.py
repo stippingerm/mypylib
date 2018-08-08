@@ -932,25 +932,33 @@ class copula_base_gen(multivariate_transform_base):
 
 
 class archimedean_copula_gen(copula_base_gen):
-    def __init__(self, marginal_gen, joint_gen, *args,
+    def __init__(self, marginal_gen, joint_gen, iid_marginals, *args,
                  fit_init=None, fit_bounds=None, dtype_marginal=float, dtype_joint=float, name=None, **kwargs):
         """
-        From a common parameter set provide the separate parameters for marginal and joint distributions
+        Based on the generator function provide an exchangeable Archimedean copula.
 
         Parameters
         ----------
-        marginal_gen: subclass of scipy._rv_continuous
-        joint_gen: subclass of scipy.stats._multivariate.multi_rv_generic
+        marginal_gen: subclass of archimedean_generator_base
+        joint_gen: subclass of archimedean_generator_base
         iid_marginals: bool
-        *args: arguments for multi_rv_generic
+        *args: arguments for archimedean_generator_base
         fit_method: string['exact', 'optimize']
         fit_init: ndarray
         fit_bounds: None, ndarray
         dtype_marginal: Union[Type, np.dtype]
         dtype_joint: Union[Type, np.dtype]
+        name: string
         **kwargs: keyword arguments for  multi_rv_generic
+
+        Notes
+        -----
+        The generator must be implemented analogously to method ppf of scipy.stats.rv_continuous and its inverse,
+        the cdf must be available too along with its arbitrary order derivatives cdfd.
         """
-        super(archimedean_copula_gen, self).__init__(marginal_gen, joint_gen, True, *args,
+        if not iid_marginals:
+            raise NotImplementedError('Only exchangeable Archimedean copulas are supported, i.e., iid marginals.')
+        super(archimedean_copula_gen, self).__init__(marginal_gen, joint_gen, iid_marginals, *args,
                                                      fit_method='optimize', fit_init=fit_init, fit_bounds=fit_bounds,
                                                      dtype_marginal=dtype_marginal, dtype_joint=dtype_joint,
                                                      name=name, **kwargs)
@@ -971,15 +979,18 @@ class archimedean_copula_gen(copula_base_gen):
         TODO: create a wrapper class for distributions that do not have fit.
         """
         dim = data.shape[-1]
-        if self.iid_marginals:
-            init = np.array(self._fit_init, dtype=float)
-            bounds = np.array(self._fit_bounds, dtype=float)
+        if len(self._fit_init):
+            if self.iid_marginals:
+                init = np.array(self._fit_init, dtype=float)
+                bounds = np.array(self._fit_bounds, dtype=float)
+            else:
+                init = np.repeat(np.array(self._fit_init)[np.newaxis, ...], dim, axis=0)
+                bounds = np.repeat(np.array(self._fit_bounds)[np.newaxis, ...], dim, axis=0)
+            if self._fit_bounds is None:
+                bounds = None
+            params = minimize(lambda x: -np.sum(self._logpdf(data, [x], x)), x0=init, bounds=bounds)
         else:
-            init = np.repeat(np.array(self._fit_init)[np.newaxis, ...], dim, axis=0)
-            bounds = np.repeat(np.array(self._fit_bounds)[np.newaxis, ...], dim, axis=0)
-        if self._fit_bounds is None:
-            bounds = None
-        params = minimize(lambda x: -np.sum(self._logpdf(data, [x], x)), x0=init, bounds=bounds)
+            params = np.recarray(0, dtype=[('x', float)])
 
         marginal = _repeat_params(params.x, dim)
         joint = params.x
@@ -1105,7 +1116,7 @@ passthru_norm = passthru_norm_gen()
 # _exist(passthru_norm.fit)
 
 
-class multivariate_cov_only_normal_gen(multivariate_normal_gen):
+class multivariate_corr_only_normal_gen(multivariate_normal_gen):
     """Example extension to the multivariate normal distribution with
        ML fit capability"""
 
@@ -1139,11 +1150,11 @@ class multivariate_cov_only_normal_gen(multivariate_normal_gen):
         mn = np.mean(X, axis=0)
         if not self._fit_mean:
             mn = np.zeros_like(mn)
-        co = np.cov(X, rowvar=False)
+        co = np.corrcoef(X, rowvar=False)
         return mn, co
 
 
-multivariate_cov_only_normal = multivariate_cov_only_normal_gen(fit_mean=False)
+multivariate_cov_only_normal = multivariate_corr_only_normal_gen(fit_mean=False)
 # _exist(multivariate_cov_only_normal.fit)
 
 
@@ -1298,7 +1309,10 @@ class archimedean_generator_base(rv_continuous):
     """Base class for generators of Archimedean copulas that provides
     numerical differentiation of the inverse of the generator.
     Note that these are not valid probability distributions because the
-    cdf is monotoically decreasing and therefore the pdf is negative."""
+    cdf is monotonically decreasing and therefore the pdf is negative."""
+    # TODO: change boundary definitions of odf, logpdf, cdf, locdf \
+    # to match the decreasing trend
+
     # The "generator of the copula" phi: [0,1] --> [0,inf)
     # This is a strictly decreasing function such that phi(1)=0 and
     # it is applied to the marginal distribution.
@@ -1505,13 +1519,13 @@ gaussian_copula = copula_base_gen(marginal_gen=passthru_norm, joint_gen=multivar
                                   iid_marginals=True, fit_method='exact', dtype_joint=None, name="Gaussian")
 
 independent_copula = archimedean_copula_gen(marginal_gen=independent_generator, joint_gen=independent_generator,
-                                            fit_init=[], fit_bounds=[], name="Independent")
+                                            iid_marginals=True, fit_init=[], fit_bounds=None, name="Independent")
 clayton_copula = archimedean_copula_gen(marginal_gen=clayton_generator, joint_gen=clayton_generator,
-                                        fit_init=1, fit_bounds=[0, np.inf], name="Clayton")
+                                        iid_marginals=True, fit_init=1, fit_bounds=[0, np.inf], name="Clayton")
 gumbel_copula = archimedean_copula_gen(marginal_gen=gumbel_generator, joint_gen=gumbel_generator,
-                                       fit_init=2, fit_bounds=[1, np.inf], name="Gumbel")
+                                       iid_marginals=True, fit_init=2, fit_bounds=[1, np.inf], name="Gumbel")
 frank_copula = archimedean_copula_gen(marginal_gen=frank_generator, joint_gen=frank_generator,
-                                      fit_init=1, fit_bounds=[-np.inf, np.inf], name="Frank")
+                                      iid_marginals=True, fit_init=1, fit_bounds=[-np.inf, np.inf], name="Frank")
 
 
 def make_copula(marginal, joint, iid_marginals=True):
