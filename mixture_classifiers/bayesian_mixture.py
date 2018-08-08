@@ -1399,6 +1399,7 @@ class BayesianGaussianClassifier(MixtureClassifierMixin, BayesianGaussianMixture
 
 
 class BayesianFairTiedClassifier(BayesianGaussianClassifier):
+    def __init__(self, n_components_per_class=1, covariance_type='tied', tol=1e-3,
                  reg_covar=1e-6, max_iter=100, n_init=1, init_params='kmeans', use_weights=True,
                  classes_init=None, weight_concentration_prior_type='dirichlet_process',
                  weight_concentration_prior=None,
