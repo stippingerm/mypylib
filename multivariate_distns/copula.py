@@ -1564,7 +1564,7 @@ def make_copula(marginal, joint, iid_marginals=True):
     joint_gen = allowed_joint[joint]
 
     iid_marginals = bool(iid_marginals)
-    return multivariate_transform_base(marginal_gen=marginal_gen,
+    return histogram_normalization_gen(marginal_gen=marginal_gen,
                                        joint_gen=joint_gen,
                                        iid_marginals=iid_marginals,
                                        **tuning)
