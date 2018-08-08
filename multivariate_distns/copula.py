@@ -7,7 +7,9 @@
 # See: Berkes, Wood & Pillow (2009). Characterizing neural dependencies with copula models. NIPS 21, 129–136.
 # Retrieved from http://papers.nips.cc/paper/3593-characterizing-neural-dependencies-with-copula-models.pdf
 # See also: https://www.vosesoftware.com/riskwiki/Archimedeancopulas-theClaytonFrankandGumbel.php
-# Two-variate implementation of Archimedian copulas is available in copulalib but it is far from complete.
+# Two-variate implementation of Archimedean copulas is available in copulalib but it is far from complete.
+# The continuation of copulalib is https://pypi.org/project/ambhas/ still bivariate copulas only.
+# Sampling from cdf is difficult but feasible for Archimedean copulas: https://stackoverflow.com/a/50981679
 # http://pluto.huji.ac.il/~galelidan/Copulas%20and%20Machine%20Learning.pdf
 
 import numpy as np
@@ -117,7 +119,7 @@ def _broadcast_shapes(a, b, align_as_numpy=True):
 # with $f_nn$ denoting the function $F_nn$ derived once in each of its args.
 #
 # Since the definition was given through the cdf no normalization is needed.
-# In our implementation, Archimedian copula generators are implemented as
+# In our implementation, Archimedean copula generators are implemented as
 # `ppf` and the inverse of the generator is a `cdf` satisfying usual domain
 # of definition. Where possible the nth derivative of the cdf is given too.
 #
@@ -285,6 +287,14 @@ def _unit_interval_check(stat, data, params=None):
         raise ValueError("Data point out of the support [0,1] of marginal distribution")
 
 
+def _repeat_params(params, dim):
+    """Broadcast params to (dim, *params.shape)"""
+    params = params[np.newaxis, ...]
+    final_shape = _broadcast_shapes(params.shape, dim, align_as_numpy=False)
+    repeated = np.broadcast_to(params, final_shape)
+    return repeated
+
+
 def _fit_common_marginal(stat, data, repeat=True):
     """Estimate the parameters for marginal distributions.
 
@@ -299,11 +309,10 @@ def _fit_common_marginal(stat, data, repeat=True):
     -------
     params: array, shape (n_comp, n_param_per_comp, ...)"""
     _, data, _ = _align_vars(0, data, 0)
-    ret = np.array(stat.fit(data.ravel()), ndmin=1)[np.newaxis, ...]
-    if repeat:
-        final_shape = _broadcast_shapes(ret.shape, data.shape[-1], align_as_numpy=False)
-        ret = np.broadcast_to(ret, final_shape)
-    return ret
+    params = np.array(stat.fit(data.ravel()), ndmin=1)
+    dim = data.shape[-1] if repeat else 1
+    repeated = _repeat_params(params, dim)
+    return repeated
 
 
 def _transform_to_hypercube(stat, data, params):
@@ -896,7 +905,7 @@ class copula_base_gen(multivariate_transform_gen):
         return ret
 
 
-class archimedian_copula_gen(copula_base_gen):
+class archimedean_copula_gen(copula_base_gen):
     def __init__(self, marginal_gen, joint_gen, *args,
                  fit_init=None, fit_bounds=None, dtype_marginal=float, dtype_joint=float, name=None, **kwargs):
         """
@@ -915,7 +924,7 @@ class archimedian_copula_gen(copula_base_gen):
         dtype_joint: Union[Type, np.dtype]
         **kwargs: keyword arguments for  multi_rv_generic
         """
-        super(archimedian_copula_gen, self).__init__(marginal_gen, joint_gen, True, *args,
+        super(archimedean_copula_gen, self).__init__(marginal_gen, joint_gen, True, *args,
                                                      fit_method='optimize', fit_init=fit_init, fit_bounds=fit_bounds,
                                                      dtype_marginal=dtype_marginal, dtype_joint=dtype_joint,
                                                      name=name, **kwargs)
@@ -940,12 +949,12 @@ class archimedian_copula_gen(copula_base_gen):
         """
         # Note: if dealing with generators logpdf does not necessarily exist
         internal = _transform_to_domain_of_def(stat=self.marginal_gen, data=x, params=marginal)
-        # marginal_logpdf = -_log_jacobian(stat=self.marginal_gen, data=internal, params=marginal)
-        marginal_logpdf = -np.log(_jacobian(stat=self.marginal_gen, data=internal, params=marginal))
+        marginal_logpdf = -_log_jacobian(stat=self.marginal_gen, data=internal, params=marginal)
+        # marginal_logpdf = -np.log(_jacobian(stat=self.marginal_gen, data=internal, params=marginal))
 
         dim = internal.shape[-1]
         # joint_pdf = derivative(lambda x0: self.joint_gen.cdf(x0, *joint), np.sum(internal, axis=-1), dx=1e-6, n=dim)
-        joint_pdf = self.joint_gen.cdfd(np.sum(internal, axis=-1), *joint, n=dim)
+        joint_pdf = np.abs(self.joint_gen.cdfd(np.sum(internal, axis=-1), *joint, n=dim))
 
         return np.log(joint_pdf) + marginal_logpdf
 
@@ -1206,20 +1215,28 @@ def invert_cdf(stat):
     return stat
 
 
-class archimedian_generator_gen(rv_continuous):
+class archimedean_generator_gen(rv_continuous):
+    """Base class for generators of Archimedean copulas that provides
+    numerical differentiation of the inverse of the generator.
+    Note that these are not valid probability distributions because the
+    cdf is monotoically decreasing and therefore the pdf is negative."""
     # The "generator of the copula" phi: [0,1] --> [0,inf)
     # This is a strictly decreasing function such that phi(1)=0 and
     # it is applied to the marginal distribution.
     # def _ppf(self, q, *args):
-    # archimedian_generator_gen._ppf.__doc__ += \
-    #     "This is the generator of the Archimedian copula"
+    # archimedean_generator_gen._ppf.__doc__ += \
+    #     "This is the generator of the Archimedean copula"
 
     # The inverse of the generator phi^{-1}: [0,inf) --> [0,1]
     # This applied to the sum of the generators valid arguments fall into
     # [0, phi(0)]. Outside this range the pseudoinverse is defined as zero.
     # def _cdf(self, x, theta):
-    # archimedian_generator_gen._cdf.__doc__ += \
-    #     "This is the inverse of the generator of the Archimedian copula"
+    # archimedean_generator_gen._cdf.__doc__ += \
+    #     "This is the inverse of the generator of the Archimedean copula"
+
+    # Make sure logpdf can be calculated (positive argument to log)
+    def _logpdf(self, x, *args):
+        return np.log(-self._pdf(x, *args))
 
     # The nth derivative of the inverse of the generator
     def _cdfd(self, x, *args, n=1):
@@ -1278,11 +1295,11 @@ class archimedian_generator_gen(rv_continuous):
 
 
 def _test_cdfd(stat, x, *args, n=1):
-    if stat._cdfd.__code__ is archimedian_generator_gen._cdfd.__code__:
+    if stat._cdfd.__code__ is archimedean_generator_gen._cdfd.__code__:
         return ValueError('Numerically differentiating method is not overridden with analytic one.')
     x, *args, n = np.atleast_1d(x, *args, n)
     ana = stat._cdfd(x, *args, n=n)
-    vecdiff = np.vectorize(archimedian_generator_gen._cdfd)
+    vecdiff = np.vectorize(archimedean_generator_gen._cdfd)
     num = vecdiff(stat, x, *args, n=n)
     good = np.allclose(ana, num)
     if not good:
@@ -1290,7 +1307,7 @@ def _test_cdfd(stat, x, *args, n=1):
     return good
 
 
-class independent_generator_gen(archimedian_generator_gen):
+class independent_generator_gen(archimedean_generator_gen):
     def _argcheck(self, *args):
         """Default check for correct values on args and keywords.
 
@@ -1303,8 +1320,8 @@ class independent_generator_gen(archimedian_generator_gen):
             cond = np.logical_and(cond, (~np.isnan(arg)))
         return cond
 
-    def _ppf(self, x):
-        ret = -np.log(x)
+    def _ppf(self, q):
+        ret = -np.log(q)
         return ret
 
     def _cdf(self, x):
@@ -1313,6 +1330,10 @@ class independent_generator_gen(archimedian_generator_gen):
 
     def _pdf(self, x):
         ret = -np.exp(-x)
+        return ret
+
+    def _logpdf(self, x):
+        ret = -x
         return ret
 
     def _cdfd(self, x, n):
@@ -1325,9 +1346,8 @@ class independent_generator_gen(archimedian_generator_gen):
 
 
 independent_generator = independent_generator_gen(name='indep')
-
-
 # _test_cdfd(independent_generator, [0.1, 5, 3], n=[5, 2, 1])
+
 
 def _log_prod_arithmetic_progression(a, d, n):
     """The product of the members of a finite arithmetic progression
@@ -1338,9 +1358,9 @@ def _log_prod_arithmetic_progression(a, d, n):
     return n * np.log(d) + gammaln(frac + n) - gammaln(frac)
 
 
-class clayton_generator_gen(archimedian_generator_gen):
-    def _ppf(self, x, theta):
-        ret = 1.0 / theta * (np.power(x, -theta) - 1)
+class clayton_generator_gen(archimedean_generator_gen):
+    def _ppf(self, q, theta):
+        ret = 1.0 / theta * (np.power(q, -theta) - 1)
         return ret
 
     def _cdf(self, x, theta):
@@ -1349,6 +1369,10 @@ class clayton_generator_gen(archimedian_generator_gen):
 
     def _pdf(self, x, theta):
         ret = -np.power(theta * x + 1, -1.0 / theta - 1)
+        return ret
+
+    def _logpdf(self, x, theta):
+        ret = (-1.0 / theta - 1) * np.log(theta * x + 1)
         return ret
 
     def _cdfd(self, x, theta, n=1):
@@ -1362,9 +1386,9 @@ clayton_generator = clayton_generator_gen(name='clayton')
 # _test_cdfd(clayton_generator, [0.1, 5, 3], 1.5, n=[5, 2, 1])
 
 
-class gumbel_generator_gen(archimedian_generator_gen):
-    def _ppf(self, x, theta):
-        ret = np.power(-np.log(x), -theta)
+class gumbel_generator_gen(archimedean_generator_gen):
+    def _ppf(self, q, theta):
+        ret = np.power(-np.log(q), -theta)
         return ret
 
     def _cdf(self, x, theta):
@@ -1375,13 +1399,17 @@ class gumbel_generator_gen(archimedian_generator_gen):
         ret = -np.power(x, 1./theta-1) * np.exp(-np.power(x, 1. / theta))
         return ret
 
+    def _logpdf(self, x, theta):
+        ret = (1./theta-1) * np.log(x) - np.power(x, 1. / theta)
+        return ret
+
 
 gumbel_generator = gumbel_generator_gen(name='gumbel')
 
 
-class frank_generator_gen(archimedian_generator_gen):
-    def _ppf(self, x, theta):
-        ret = -np.log(np.expm1(-theta * x) / np.expm1(-theta))
+class frank_generator_gen(archimedean_generator_gen):
+    def _ppf(self, q, theta):
+        ret = -np.log(np.expm1(-theta * q) / np.expm1(-theta))
         return ret
 
     def _cdf(self, x, theta):
@@ -1410,11 +1438,11 @@ iid_gaussian_copula = copula_base_gen(marginal_gen=norm,
                                       joint_gen=gaussian_copula,
                                       iid_marginals=True, dtype_joint=None)
 
-independent_copula = archimedian_copula_gen(marginal_gen=independent_generator, joint_gen=independent_generator,
+independent_copula = archimedean_copula_gen(marginal_gen=independent_generator, joint_gen=independent_generator,
                                             fit_init=0, fit_bounds=[0, 1], name="Independent")
-clayton_copula = archimedian_copula_gen(marginal_gen=clayton_generator, joint_gen=clayton_generator,
+clayton_copula = archimedean_copula_gen(marginal_gen=clayton_generator, joint_gen=clayton_generator,
                                         fit_init=1, fit_bounds=[0, np.inf], name="Clayton")
-frank_copula = archimedian_copula_gen(marginal_gen=frank_generator, joint_gen=frank_generator,
+frank_copula = archimedean_copula_gen(marginal_gen=frank_generator, joint_gen=frank_generator,
                                       fit_init=1,
                                       fit_bounds=[-np.inf, np.inf], name="Frank")
 
