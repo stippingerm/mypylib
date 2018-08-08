@@ -22,7 +22,7 @@ from sklearn.base import TransformerMixin
 from scipy.misc import derivative
 from scipy.special import gamma, gammaln
 from abc import abstractmethod
-
+from scipy.optimize import brentq as solve, minimize
 
 def _exist(*unused):
     """Check if the argument exists: in fact the check happens
@@ -416,7 +416,7 @@ _mj_doc_callparams_note = \
     """
 
 
-class multivariate_transform_gen(multi_rv_generic):
+class multivariate_transform_base(multi_rv_generic):
     def __init__(self, marginal_gen, joint_gen, iid_marginals, *args,
                  fit_method='exact', fit_init=None, fit_bounds=None,
                  dtype_marginal=float, dtype_joint=float, name=None, **kwargs):
@@ -451,7 +451,7 @@ class multivariate_transform_gen(multi_rv_generic):
         else:
             raise ValueError('fit_method must be one of the following: exact, optimize')
         self._fit_method = fit_method
-        super(multivariate_transform_gen, self).__init__(*args, **kwargs)
+        super(multivariate_transform_base, self).__init__(*args, **kwargs)
 
     @abstractmethod
     def fit(self, data, loc=0, scale=1):
@@ -673,7 +673,7 @@ class multivariate_transform_gen(multi_rv_generic):
         return ret
 
 
-class histogram_normalization_gen(multivariate_transform_gen):
+class histogram_normalization_gen(multivariate_transform_base):
     def __init__(self, marginal_gen, joint_gen, iid_marginals, *args,
                  fit_method='exact', fit_init=None, fit_bounds=None,
                  dtype_marginal=float, dtype_joint=float, name=None, **kwargs):
@@ -801,7 +801,7 @@ class histogram_normalization_gen(multivariate_transform_gen):
         return ret
 
 
-class copula_base_gen(multivariate_transform_gen):
+class copula_base_gen(multivariate_transform_base):
     def __init__(self, marginal_gen, joint_gen, iid_marginals, *args,
                  fit_method='exact', fit_init=None, fit_bounds=None,
                  dtype_marginal=float, dtype_joint=float, name=None, **kwargs):
@@ -823,14 +823,40 @@ class copula_base_gen(multivariate_transform_gen):
         elif fit_method == 'optimize':
             if fit_init is None:
                 raise ValueError('Initial values to fit must be provided')
-            self._fit_init = fit_init
-            self._fit_bounds = fit_bounds
+            self._fit_init = np.atleast_1d(fit_init)
+            if fit_bounds is None:
+                self._fit_bounds = None
+            else:
+                self._fit_bounds = np.atleast_2d(fit_bounds)
         else:
             raise ValueError('fit_method must be one of the following: exact, optimize')
         self._fit_method = fit_method
         super(copula_base_gen, self).__init__(marginal_gen, joint_gen, iid_marginals, *args,
                                               dtype_marginal=dtype_marginal, dtype_joint=dtype_joint,
                                               name=name, **kwargs)
+
+    def fit(self, data, loc=0, scale=1):
+        """
+        Fit both the parameters of the marginals and the joint distribution one after another
+
+        Parameters
+        ----------
+        data : ndarray, shape (..., n_comp)
+            Data samples, with the last axis of `data` denoting the components.
+
+        Notes
+        -----
+        This function uses the fit capability of underlying distributions.
+        TODO: create a wrapper class for distributions that do not have fit.
+        """
+        if self.iid_marginals:
+            marginal = _fit_common_marginal(self.marginal_gen, data)
+        else:
+            marginal = _fit_individual_marginals(self.marginal_gen, data)
+        internal = _transform_to_domain_of_def(stat=self.marginal_gen, data=data, params=marginal)
+
+        joint = self.joint_gen.fit(internal)
+        return marginal, joint
 
     def _logpdf(self, x, marginal, joint):
         """
@@ -930,6 +956,35 @@ class archimedean_copula_gen(copula_base_gen):
                                                      name=name, **kwargs)
         self._range_check = _unit_interval_check
 
+    def fit(self, data, loc=0, scale=1):
+        """
+        Fit both the parameters of the marginals and the joint distribution one after another
+
+        Parameters
+        ----------
+        data : ndarray, shape (..., n_comp)
+            Data samples, with the last axis of `data` denoting the components.
+
+        Notes
+        -----
+        This function uses the fit capability of underlying distributions.
+        TODO: create a wrapper class for distributions that do not have fit.
+        """
+        dim = data.shape[-1]
+        if self.iid_marginals:
+            init = np.array(self._fit_init, dtype=float)
+            bounds = np.array(self._fit_bounds, dtype=float)
+        else:
+            init = np.repeat(np.array(self._fit_init)[np.newaxis, ...], dim, axis=0)
+            bounds = np.repeat(np.array(self._fit_bounds)[np.newaxis, ...], dim, axis=0)
+        if self._fit_bounds is None:
+            bounds = None
+        params = minimize(lambda x: -np.sum(self._logpdf(data, [x], x)), x0=init, bounds=bounds)
+
+        marginal = _repeat_params(params.x, dim)
+        joint = params.x
+        return marginal, joint
+
     def _logpdf(self, x, marginal, joint):
         """
         Parameters
@@ -1005,6 +1060,22 @@ class archimedean_copula_gen(copula_base_gen):
         raise NotImplementedError
 
 
+# Some useful marginal and joint distribution
+
+
+# class invert_cdf(rv_continuous):
+#     def __init__(self, underlying, *args, **kwargs):
+#         self._cdf = underlying._ppf
+#         self._ppf = underlying._cdf
+#         super(invert_cdf, self).__init__(*args, **kwargs)
+
+
+def invert_cdf(stat):
+    stat._cdf, stat._ppf = stat._ppf, stat._cdf
+    stat._pdf = super(type(stat), stat)._pdf
+    return stat
+
+
 class passthru_norm_gen(type(norm)):
     """Example extension to the multivariate normal distribution without
        ML fit capability"""
@@ -1028,6 +1099,10 @@ class passthru_norm_gen(type(norm)):
 
         """
         return 0, 1
+
+
+passthru_norm = passthru_norm_gen()
+# _exist(passthru_norm.fit)
 
 
 class multivariate_cov_only_normal_gen(multivariate_normal_gen):
@@ -1066,6 +1141,17 @@ class multivariate_cov_only_normal_gen(multivariate_normal_gen):
             mn = np.zeros_like(mn)
         co = np.cov(X, rowvar=False)
         return mn, co
+
+
+multivariate_cov_only_normal = multivariate_cov_only_normal_gen(fit_mean=False)
+# _exist(multivariate_cov_only_normal.fit)
+
+
+# passthru_t = passthru_t_gen()
+# _exist(passthru_norm.fit)
+
+# multivariate_cov_only_t = multivariate_cov_only_t_gen(fit_mean=False)
+# _exist(multivariate_cov_only_normal.fit)
 
 
 class my_gaussian_kde_gen(rv_continuous):
@@ -1202,20 +1288,13 @@ class my_gaussian_kde_gen(rv_continuous):
         return inst
 
 
-#
-# class invert_cdf(rv_continuous):
-#     def __init__(self, underlying, *args, **kwargs):
-#         self._cdf = underlying._ppf
-#         self._ppf = underlying._cdf
-#         super(invert_cdf, self).__init__(*args, **kwargs)
-
-def invert_cdf(stat):
-    stat._cdf, stat._ppf = stat._ppf, stat._cdf
-    stat._pdf = super(type(stat), stat)._pdf
-    return stat
+my_gaussian_kde = my_gaussian_kde_gen(0, name="gaussian_kde")
 
 
-class archimedean_generator_gen(rv_continuous):
+# Archimedean copula generators (pseudo-distributions)
+
+
+class archimedean_generator_base(rv_continuous):
     """Base class for generators of Archimedean copulas that provides
     numerical differentiation of the inverse of the generator.
     Note that these are not valid probability distributions because the
@@ -1295,11 +1374,11 @@ class archimedean_generator_gen(rv_continuous):
 
 
 def _test_cdfd(stat, x, *args, n=1):
-    if stat._cdfd.__code__ is archimedean_generator_gen._cdfd.__code__:
+    if stat._cdfd.__code__ is archimedean_generator_base._cdfd.__code__:
         return ValueError('Numerically differentiating method is not overridden with analytic one.')
     x, *args, n = np.atleast_1d(x, *args, n)
     ana = stat._cdfd(x, *args, n=n)
-    vecdiff = np.vectorize(archimedean_generator_gen._cdfd)
+    vecdiff = np.vectorize(archimedean_generator_base._cdfd)
     num = vecdiff(stat, x, *args, n=n)
     good = np.allclose(ana, num)
     if not good:
@@ -1307,7 +1386,7 @@ def _test_cdfd(stat, x, *args, n=1):
     return good
 
 
-class independent_generator_gen(archimedean_generator_gen):
+class independent_generator_gen(archimedean_generator_base):
     def _argcheck(self, *args):
         """Default check for correct values on args and keywords.
 
@@ -1345,7 +1424,7 @@ class independent_generator_gen(archimedean_generator_gen):
     #    return ret
 
 
-independent_generator = independent_generator_gen(name='indep')
+independent_generator = independent_generator_gen(a=0, b=np.inf, name='indep')
 # _test_cdfd(independent_generator, [0.1, 5, 3], n=[5, 2, 1])
 
 
@@ -1358,7 +1437,7 @@ def _log_prod_arithmetic_progression(a, d, n):
     return n * np.log(d) + gammaln(frac + n) - gammaln(frac)
 
 
-class clayton_generator_gen(archimedean_generator_gen):
+class clayton_generator_gen(archimedean_generator_base):
     def _ppf(self, q, theta):
         ret = 1.0 / theta * (np.power(q, -theta) - 1)
         return ret
@@ -1381,12 +1460,12 @@ class clayton_generator_gen(archimedean_generator_gen):
         return ret
 
 
-clayton_generator = clayton_generator_gen(name='clayton')
+clayton_generator = clayton_generator_gen(a=0, b=np.inf, name='clayton')
 # _test_cdfd(clayton_generator, [0.1, 5, 3], 2.2, n=[5, 2, 1])
 # _test_cdfd(clayton_generator, [0.1, 5, 3], 1.5, n=[5, 2, 1])
 
 
-class gumbel_generator_gen(archimedean_generator_gen):
+class gumbel_generator_gen(archimedean_generator_base):
     def _ppf(self, q, theta):
         ret = np.power(-np.log(q), -theta)
         return ret
@@ -1404,10 +1483,10 @@ class gumbel_generator_gen(archimedean_generator_gen):
         return ret
 
 
-gumbel_generator = gumbel_generator_gen(name='gumbel')
+gumbel_generator = gumbel_generator_gen(a=0, b=np.inf, name='gumbel')
 
 
-class frank_generator_gen(archimedean_generator_gen):
+class frank_generator_gen(archimedean_generator_base):
     def _ppf(self, q, theta):
         ret = -np.log(np.expm1(-theta * q) / np.expm1(-theta))
         return ret
@@ -1417,44 +1496,23 @@ class frank_generator_gen(archimedean_generator_gen):
         return ret
 
 
-frank_generator = frank_generator_gen(name='frank')
+frank_generator = frank_generator_gen(a=0, b=np.inf, name='frank')
 
 
-passthru_norm = passthru_norm_gen()
-# _exist(passthru_norm.fit)
-
-gaussian_generator = invert_cdf(passthru_norm_gen(a=0.0, b=1.0, name='invgauss'))
-
-multivariate_cov_only_normal = multivariate_cov_only_normal_gen(fit_mean=False)
-# _exist(multivariate_cov_only_normal.fit)
-
-my_gaussian_kde = my_gaussian_kde_gen(0, name="gaussian_kde")
+# Copula models
 
 gaussian_copula = copula_base_gen(marginal_gen=passthru_norm, joint_gen=multivariate_cov_only_normal,
-                                  iid_marginals=True,
-                                  fit_method='exact', dtype_joint=None, name="Gaussian")
-
-iid_gaussian_copula = copula_base_gen(marginal_gen=norm,
-                                      joint_gen=gaussian_copula,
-                                      iid_marginals=True, dtype_joint=None)
+                                  iid_marginals=True, fit_method='exact', dtype_joint=None, name="Gaussian")
 
 independent_copula = archimedean_copula_gen(marginal_gen=independent_generator, joint_gen=independent_generator,
-                                            fit_init=0, fit_bounds=[0, 1], name="Independent")
+                                            fit_init=[], fit_bounds=[], name="Independent")
 clayton_copula = archimedean_copula_gen(marginal_gen=clayton_generator, joint_gen=clayton_generator,
                                         fit_init=1, fit_bounds=[0, np.inf], name="Clayton")
+gumbel_copula = archimedean_copula_gen(marginal_gen=gumbel_generator, joint_gen=gumbel_generator,
+                                       fit_init=2, fit_bounds=[1, np.inf], name="Gumbel")
 frank_copula = archimedean_copula_gen(marginal_gen=frank_generator, joint_gen=frank_generator,
-                                      fit_init=1,
-                                      fit_bounds=[-np.inf, np.inf], name="Frank")
+                                      fit_init=1, fit_bounds=[-np.inf, np.inf], name="Frank")
 
-
-# sep_gaussian_copula = copula_gen(marginal_gen=norm, joint_gen=my_multivariate_normal,
-#                                  iid_marginals=False)
-#
-# ker_gaussian_copula = copula_gen(marginal_gen=my_gaussian_kde, joint_gen=my_multivariate_normal,
-#                                  iid_marginals=False, tuning={'dtype_marginal': object})
-#
-# kir_gaussian_copula = copula_gen(marginal_gen=my_gaussian_kde, joint_gen=my_multivariate_normal,
-#                                  iid_marginals=True, tuning={'dtype_marginal': object})
 
 def make_copula(marginal, joint, iid_marginals=True):
     """
@@ -1492,7 +1550,7 @@ def make_copula(marginal, joint, iid_marginals=True):
     joint_gen = allowed_joint[joint]
 
     iid_marginals = bool(iid_marginals)
-    return multivariate_transform_gen(marginal_gen=marginal_gen,
-                                      joint_gen=joint_gen,
-                                      iid_marginals=iid_marginals,
-                                      **tuning)
+    return multivariate_transform_base(marginal_gen=marginal_gen,
+                                       joint_gen=joint_gen,
+                                       iid_marginals=iid_marginals,
+                                       **tuning)
