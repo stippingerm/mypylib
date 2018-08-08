@@ -747,10 +747,12 @@ class histogram_normalization_gen(multivariate_transform_base):
         """
         uniformized = _transform_to_hypercube(stat=self.marginal_gen, data=x, params=marginal)
         marginal_logpdf = _log_jacobian(stat=self.marginal_gen, data=x, params=marginal)
+        marginal_logpdf[np.isinf(marginal_logpdf)] = -np.inf
+
         joint_logpdf = self.joint_gen.logpdf(uniformized, *joint)
 
-        # TODO: make this sanitization optional (it was introduced due to values much off the centre of mv normal)
-        return np.nan_to_num(nan_to_neg_inf(joint_logpdf + marginal_logpdf))
+        # TODO: make this sanitization optional
+        return joint_logpdf + marginal_logpdf
 
     def _cdf(self, x, marginal, joint):
         """
@@ -877,10 +879,11 @@ class copula_base_gen(multivariate_transform_base):
         """
         internal = _transform_to_domain_of_def(stat=self.marginal_gen, data=x, params=marginal)
         marginal_logpdf = -_log_jacobian(stat=self.marginal_gen, data=internal, params=marginal)
+        marginal_logpdf[np.isinf(marginal_logpdf)] = -np.inf
         joint_logpdf = self.joint_gen.logpdf(internal, *joint)
 
-        # TODO: make this sanitization optional (it was introduced due to values much off the centre of mv normal)
-        return np.nan_to_num(nan_to_neg_inf(joint_logpdf + marginal_logpdf))
+        # TODO: make this sanitization optional
+        return joint_logpdf + marginal_logpdf
 
     def _cdf(self, x, marginal, joint):
         """
@@ -1017,6 +1020,7 @@ class archimedean_copula_gen(copula_base_gen):
         internal = _transform_to_domain_of_def(stat=self.marginal_gen, data=x, params=marginal)
         marginal_logpdf = -_log_jacobian(stat=self.marginal_gen, data=internal, params=marginal)
         # marginal_logpdf = -np.log(_jacobian(stat=self.marginal_gen, data=internal, params=marginal))
+        marginal_logpdf[np.isinf(marginal_logpdf)] = -np.inf
 
         dim = internal.shape[-1]
         # joint_pdf = derivative(lambda x0: self.joint_gen.cdf(x0, *joint), np.sum(internal, axis=-1), dx=1e-6, n=dim)
