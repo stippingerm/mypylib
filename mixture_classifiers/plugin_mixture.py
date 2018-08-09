@@ -443,6 +443,38 @@ class PluginClassifier(MixtureClassifierMixin, BaseMixture):
         """Return the number of free parameters in the model."""
         raise NotImplementedError
 
+    def sample(self, n_samples=1):
+        """Generate random samples from the fitted mixture distribution.
+
+        Parameters
+        ----------
+        n_samples : int, optional
+            Number of samples to generate. Defaults to 1.
+
+        Returns
+        -------
+        X : array, shape (n_samples, n_features)
+            Randomly generated sample
+
+        y : array, shape (nsamples,)
+            Component labels
+
+        """
+        self._check_is_fitted()
+
+        if n_samples < 1:
+            raise ValueError(
+                "Invalid value for 'n_samples': %d . The sampling requires at "
+                "least one sample." % (self.n_components))
+
+        raise NotImplementedError
+
+        _, n_features = self.means_.shape
+        rng = check_random_state(self.random_state)
+        n_samples_comp = rng.multinomial(n_samples, self.weights_)
+
+        return self._relabel_samples(X, y)
+
     def bic(self, X):
         """Bayesian information criterion for the current model on the input X.
 

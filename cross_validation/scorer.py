@@ -301,7 +301,7 @@ def make_scorer(score_func, greater_is_better=True, needs_proba=False,
 
 
 def np_choose_sum(idx, arr):
-    # TODO: in the similar metrics, e.g., log loss, the binary case is handles separately.
+    # TODO: in the similar metrics, e.g., log loss, the binary case is handled separately.
     # selected = arr[np.arange(n_samples), idx] is not prepared for DataFrames
     selected = np.choose(idx, arr.T)
     return np.mean(selected)

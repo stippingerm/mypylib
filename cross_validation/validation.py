@@ -1368,13 +1368,13 @@ def cross_validate_iterator(estimator, X, y=None, groups=None, scoring=None, cv=
 
     Parameters
     ----------
-    estimator: dict of any to estimator
-    X: dict of any to array-like
-    y: array-like
-    groups: array-like
+    estimator: estimator or dict of any to estimator
+    X: array-like or dict of any to array-like
+    y: array-like or dict of any to array_like
+    groups: array-like # TODO: handle them if other are dict
     scoring: scorer
     cv: splitter
-    X_for_test: dict of any to array-like
+    X_for_test: array-like or dict of any to array-like
     feature_selection_generator: callable
     n_feature: int, array-like
     how: str('product')|str('zip')
