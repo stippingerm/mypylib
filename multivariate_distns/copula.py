@@ -750,8 +750,9 @@ class histogram_normalization_gen(multivariate_transform_base):
         marginal_logpdf[np.isinf(marginal_logpdf)] = -np.inf
 
         joint_logpdf = self.joint_gen.logpdf(uniformized, *joint)
+        joint_logpdf[np.isnan(joint_logpdf)] = -np.inf
 
-        # TODO: make this sanitization optional
+        # TODO: make sanitization optional
         return joint_logpdf + marginal_logpdf
 
     def _cdf(self, x, marginal, joint):
@@ -876,13 +877,17 @@ class copula_base_gen(multivariate_transform_base):
         -----
         As this function does no argument checking, it should not be
         called directly; use 'logpdf' instead.
+        We take the absolute value of the arguments to log because
+        negative signs in marginal(s) and joint shall cancel each other.
         """
         internal = _transform_to_domain_of_def(stat=self.marginal_gen, data=x, params=marginal)
         marginal_logpdf = -_log_jacobian(stat=self.marginal_gen, data=internal, params=marginal)
         marginal_logpdf[np.isinf(marginal_logpdf)] = -np.inf
-        joint_logpdf = self.joint_gen.logpdf(internal, *joint)
 
-        # TODO: make this sanitization optional
+        joint_logpdf = self.joint_gen.logpdf(internal, *joint)
+        joint_logpdf[np.isnan(joint_logpdf)] = -np.inf
+
+        # TODO: make sanitization optional, however mvn.pdf(-inf, -inf) yields nan
         return joint_logpdf + marginal_logpdf
 
     def _cdf(self, x, marginal, joint):
@@ -1015,11 +1020,13 @@ class archimedean_copula_gen(copula_base_gen):
         -----
         As this function does no argument checking, it should not be
         called directly; use 'logpdf' instead.
+        We take the absolute value of the arguments to log because
+        negative signs in marginal(s) and joint shall cancel each other.
         """
         # Note: if dealing with generators logpdf does not necessarily exist
         internal = _transform_to_domain_of_def(stat=self.marginal_gen, data=x, params=marginal)
         marginal_logpdf = -_log_jacobian(stat=self.marginal_gen, data=internal, params=marginal)
-        # marginal_logpdf = -np.log(_jacobian(stat=self.marginal_gen, data=internal, params=marginal))
+        # marginal_logpdf = -np.log(np.abs(_jacobian(stat=self.marginal_gen, data=internal, params=marginal)))
         marginal_logpdf[np.isinf(marginal_logpdf)] = -np.inf
 
         dim = internal.shape[-1]
@@ -1341,8 +1348,9 @@ class archimedean_generator_base(rv_continuous):
         order = 2 * n + 1
         return derivative(lambda x0: self._cdf(x0, *args), x, dx=1e-2, n=n, order=order)
 
-    # def _logcdfd(self, x, *args, n=1):
-    #    return np.log(self._cdfd(x, *args, n=n))
+    # Make sure logcdfd can be calculated (positive argument to log)
+    def _logcdfd(self, x, *args, n=1):
+       return np.log(np.abs(self._cdfd(x, *args, n=n)))
 
     def cdfd(self, x, *args, n=1, **kwds):
         """
@@ -1386,6 +1394,53 @@ class archimedean_generator_base(rv_continuous):
             goodargs = argsreduce(cond, *((x,) + args))
             vec_cdfd = np.vectorize(self._cdfd)
             np.place(output, cond, vec_cdfd(*goodargs, n=n))
+        if output.ndim == 0:
+            return output[()]
+        return output
+
+
+    def logcdfd(self, x, *args, n=1, **kwds):
+        """
+        logarithm of the absolute value of the nth derivative of the cumulative distribution function of the given RV.
+
+        Parameters
+        ----------
+        x : array_like
+            quantiles
+        arg1, arg2, arg3,... : array_like
+            The shape parameter(s) for the distribution (see docstring of the
+            instance object for more information)
+        loc : array_like, optional
+            location parameter (default=0)
+        scale : array_like, optional
+            scale parameter (default=1)
+
+        Returns
+        -------
+        cdf : ndarray
+            nth derivative of the cumulative distribution function evaluated at `x`
+
+        """
+        # Based on scipy.stats._distn_infrastructure.rv_generic.logcdf
+        args, loc, scale = self._parse_args(*args, **kwds)
+        n = int(n)
+        if n < 1:
+            raise ValueError('Only positive integer is accepted as order of derivative.')
+        x, loc, scale = map(np.asarray, (x, loc, scale))
+        args = tuple(map(np.asarray, args))
+        dtyp = np.find_common_type([x.dtype, np.float64], [])
+        x = np.asarray((x - loc) / scale, dtype=dtyp)
+        cond0 = self._argcheck(*args) & (scale > 0)
+        cond1 = self._open_support_mask(x) & (scale > 0)
+        cond2 = (x >= self.b) & cond0
+        cond = cond0 & cond1
+        output = np.full(np.shape(cond), -np.inf, dtyp)
+        np.place(output, (1 - cond0) + np.isnan(x), self.badvalue)
+        np.place(output, cond2, 0.0)
+        if np.any(cond):  # call only if at least 1 entry
+            goodargs = argsreduce(cond, *((x,) + args))
+            vec_logcdfd = np.vectorize(self._logcdfd)
+            np.place(output, cond, vec_logcdfd(*goodargs, n=n))
         if output.ndim == 0:
             return output[()]
         return output
@@ -1437,9 +1492,9 @@ class independent_generator_gen(archimedean_generator_base):
         ret = np.power(-1, n % 2) * np.exp(-x)
         return ret
 
-    # def _logcdfd(self, x, n):
-    #    ret = np.power(-1, n), np.log(-x)
-    #    return ret
+    def _logcdfd(self, x, n):
+        ret = -x
+        return ret
 
 
 independent_generator = independent_generator_gen(a=0, b=np.inf, name='indep')
@@ -1469,7 +1524,7 @@ class clayton_generator_gen(archimedean_generator_base):
         return ret
 
     def _logpdf(self, x, theta):
-        ret = (-1.0 / theta - 1) * np.log(theta * x + 1)
+        ret = -(1.0 / theta + 1) * np.log(theta * x + 1)
         return ret
 
     def _cdfd(self, x, theta, n=1):
@@ -1477,6 +1532,10 @@ class clayton_generator_gen(archimedean_generator_base):
         ret = fact * np.power(1 + theta * x, -n - 1. / theta) * np.power(-1, n % 2)
         return ret
 
+    def _logcdfd(self, x, theta, n=1):
+        logfact = _log_prod_arithmetic_progression(1, theta, n)
+        ret = logfact - (n + 1. / theta) * np.log(1 + theta * x)
+        return ret
 
 clayton_generator = clayton_generator_gen(a=0, b=np.inf, name='clayton')
 # _test_cdfd(clayton_generator, [0.1, 5, 3], 2.2, n=[5, 2, 1])
