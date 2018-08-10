@@ -1173,11 +1173,18 @@ def _aggregate_score_dicts(scores):
     Example
     -------
 
-    >>> scores = [{'a': 1, 'b':10}, {'a': 2, 'b':2}, {'a': 3, 'b':3},
+    >>> scores = [{'a': 1, 'b':10}, {'a': 2, 'b':2}, {'a': 3, 'b':3}, \
     sklearn..           {'a': 10, 'b': 10}]                         # doctest: +SKIP
-    >>> _aggregate_score_dicts(scores)                        # doctest: +SKIP
+    >>> _aggregate_score_dicts(scores)                              # doctest: +SKIP
     {'a': array([1, 2, 3, 10]),
      'b': array([10, 2, 3, 10])}
+    >>> scores = [{'a': [1, 11], 'b':10}, {'a': [2, 22], 'b':2}, {'a': [3, 33], 'b':3}, \
+    sklearn..     {'a': [10, 100], 'b': 10}]                              # doctest: +SKIP
+    >>> _aggregate_score_dicts(scores)                                    # doctest: +SKIP
+    {'a': array([[ 1, 20],
+                 [ 2, 20],
+                 [ 3, 20]]),
+     'b': array([10,  2,  3])}
     """
     out = {}
     for key in scores[0]:
@@ -1202,7 +1209,7 @@ def concatenate_score_dicts(scores):
     Example
     -------
 
-    >>> scores = [{'a': [1, 11], 'b':10}, {'a': [2, 22], 'b':2}, {'a': [3, 33], 'b':3},
+    >>> scores = [{'a': [1, 11], 'b':10}, {'a': [2, 22], 'b':2}, {'a': [3, 33], 'b':3}, \
     sklearn..     {'a': [10, 100], 'b': 10}]                              # doctest: +SKIP
     >>> concatenate_score_dicts(scores)                                   # doctest: +SKIP
     {'a': array([  1,  11,   2,  22,   3,  33,  10, 100]),
@@ -1323,7 +1330,7 @@ def safe_features(X, indices):
 
 
 def _cross_validate_inner(est_key, train_key, test_key, feat, est, train, y, groups, scoring, cv, test, cv_params,
-                          nested):
+                          nested, on_failure):
     # delay feature selection and cloning as it may require a lot of memory
     train, test = safe_features(train, feat), (test if test is None else safe_features(test, feat))
     cloned_est = clone(est)
@@ -1334,7 +1341,16 @@ def _cross_validate_inner(est_key, train_key, test_key, feat, est, train, y, gro
             result = cross_validate(cloned_est, train, y, groups, scoring, cv, test, **cv_params)
     except Exception as e:
         msg = 'Failure to cross-validate %s' % est
-        raise ValueError(msg) from e
+        reason = 'For the following reason: %s' % e
+        if on_failure == 'ignore':
+            pass
+        elif on_failure == 'report':
+            print(msg, reason)
+        elif on_failure == 'warn':
+            warnings.warn(msg + reason)
+        else:
+            raise ValueError(msg) from e
+        result = {}
     return est_key, train_key, test_key, len(feat), feat, result
 
 
@@ -1362,7 +1378,8 @@ class random_feature_selector():
 def cross_validate_iterator(estimator, X, y=None, groups=None, scoring=None, cv=None, X_for_test=None,
                             feature_selection_generator=None, n_feature=0, how='product',
                             progress_bar=None, progress_params=None, n_jobs=1, verbose=0, fit_params=None,
-                            pre_dispatch='2*n_jobs', return_train_score="warn", nested=False):
+                            pre_dispatch='2*n_jobs', return_train_score="warn", nested=False,
+                            on_failure='raise'):
     """
     Iterate over inputs to cross-validation to keep the parallel execution queue filled.
 
@@ -1386,6 +1403,7 @@ def cross_validate_iterator(estimator, X, y=None, groups=None, scoring=None, cv=
     pre_dispatch: str
     return_train_score: bool
     nested: bool
+    on_failure: ['ignore', 'report', 'warn', 'raise'], how to handle errors raised by estimators, default: 'raise'
 
     Returns
     -------
@@ -1435,6 +1453,8 @@ def cross_validate_iterator(estimator, X, y=None, groups=None, scoring=None, cv=
 
     progress_params = {**({} if progress_params is None else progress_params), 'total': total}
     cv_params = {'verbose': verbose, 'fit_params': fit_params, 'return_train_score': return_train_score}
+    if on_failure not in ['ignore', 'report', 'warn', 'raise']:
+        raise ValueError('Unsupported failure handling.')
 
     # We need to clone the estimator to make sure that all the folds are
     # independent, and that it is pickle-able.
@@ -1443,15 +1463,19 @@ def cross_validate_iterator(estimator, X, y=None, groups=None, scoring=None, cv=
     results = parallel(
         (delayed(_cross_validate_inner)(
             est_key, train_key, test_key, feat, est, train, (y if same_y else y[train_key]),
-            groups, scoring, cv, test, cv_params, nested))
+            groups, scoring, cv, test, cv_params, nested, on_failure))
         for (est_key, est), (train_key, train), (test_key, test), n_feat in
         progress_bar(conditions_iterator, **progress_params)
         # no harm to convert to list, this is is going to be stored in memory  anyway
         for feat in inner_progress_bar(list(feature_selection_generator(train.shape[1] if n_feat == 0 else n_feat)),
                                        desc='Feat', leave=False))
 
-    keys = ['estimator', 'train', 'test', 'n_feature', 'feature', 'scores']
+    # Make a dict of arrays from "results.T"
+    keys = ['estimator', 'train', 'test', 'n_feature', 'feature', 'scores_stats']
     results = {k: np.asarray(v) for k, v in zip(keys, zip(*results))}
-    scores = results.pop('scores')
-    results.update(_aggregate_score_dicts(scores))
+    scores_stats = results.pop('scores_stats')
+    # Filter results and format scores: shape (..., n_fold)
+    success = [bool(len(v)) for v in scores_stats]
+    results = {k: v[success] for k, v in results.items()}
+    results.update(_aggregate_score_dicts(scores_stats[success]))
     return results
