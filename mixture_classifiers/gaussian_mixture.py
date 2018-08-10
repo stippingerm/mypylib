@@ -65,6 +65,72 @@ def vineCorr(P):
     return S
 
 
+def _estimate_gaussian_covariances_tidi(resp, X, nk, means, reg_covar):
+    """Estimate the tied covariance matrix.
+
+    Parameters
+    ----------
+    resp : array-like, shape (n_samples, n_components)
+
+    X : array-like, shape (n_samples, n_features)
+
+    nk : array-like, shape (n_components,)
+
+    means : array-like, shape (n_components, n_features)
+
+    reg_covar : float
+
+    Returns
+    -------
+    covariance : array, shape (1, n_features)
+        The tied diagonal covariance matrix of the components.
+        Note: shaoe conforms diagonal calculations.
+    """
+    avg_X2 = np.sum(X * X, axis=0)
+    avg_means2 = np.dot(nk, means*means)
+    covariance = avg_X2 - avg_means2
+    covariance /= nk.sum()
+    covariance += reg_covar
+    return covariance[np.newaxis, :]
+
+
+def _estimate_tidi_gaussian_parameters(X, resp, reg_covar, covariance_type):
+    """Estimate the Gaussian distribution parameters.
+
+    Parameters
+    ----------
+    X : array-like, shape (n_samples, n_features)
+        The input data array.
+
+    resp : array-like, shape (n_samples, n_components)
+        The responsibilities for each data sample in X.
+
+    reg_covar : float
+        The regularization added to the diagonal of the covariance matrices.
+
+    covariance_type : {'diag'}
+        The type of precision matrices.
+
+    Returns
+    -------
+    nk : array-like, shape (n_components,)
+        The numbers of data samples in the current components.
+
+    means : array-like, shape (n_components, n_features)
+        The centers of the current components.
+
+    covariances : array-like
+        The covariance matrix of the current components.
+        The shape depends of the covariance_type.
+    """
+    nk = resp.sum(axis=0) + 10 * np.finfo(resp.dtype).eps
+    means = np.dot(resp.T, X) / nk[:, np.newaxis]
+    # TODO: when megring code to sklearn, change this dict key
+    covariances = {"diag": _estimate_gaussian_covariances_tidi,
+                   }[covariance_type](resp, X, nk, means, reg_covar)
+    return nk, means, covariances
+
+
 def _estimate_fair_gaussian_parameters(X, resp, reg_covar, covariance_type, random_state):
     """Estimate the Gaussian distribution parameters.
 
@@ -88,7 +154,10 @@ def _estimate_fair_gaussian_parameters(X, resp, reg_covar, covariance_type, rand
     Returns
     -------
     nk : array-like, shape (n_components,)
-        The numbers of data samples in the current components.
+        The numbers of data samples in the current components for mean estimation.
+
+    nk_fair : array-like, shape (n_components,)
+        The numbers of data samples in the current components for covariance estimation.
 
     means : array-like, shape (n_components, n_features)
         The centers of the current components.
@@ -392,11 +461,49 @@ class FairTiedClassifier(GaussianClassifier):
             Logarithm of the posterior probabilities (or responsibilities) of
             the point of each sample in X.
         """
+        # TODO: provide reliable class info to stratified subsampling if multiple components per class used.
         n_samples, _ = X.shape
         random_state = check_random_state(self.random_state)
         self.weights_, _, self.means_, self.covariances_ = (
             _estimate_fair_gaussian_parameters(X, np.exp(log_resp), self.reg_covar,
                                                self.covariance_type, random_state))
+        self.weights_ /= n_samples
+        self.precisions_cholesky_ = _compute_precision_cholesky(
+            self.covariances_, self.covariance_type)
+
+
+class DiagTiedClassifier(GaussianClassifier):
+    def __init__(self, n_components=1, covariance_type='tied', tol=1e-3,
+                 reg_covar=1e-6, max_iter=100, n_init=1, init_params='kmeans',
+                 classes_init=None, weights_init=None, use_weights=True, means_init=None, precisions_init=None,
+                 random_state=None, warm_start=False,
+                 verbose=0, verbose_interval=10):
+        if covariance_type != 'diag':
+            raise ValueError('Diag tied estimation may be requested for "diag" covariances only.')
+        GaussianClassifier.__init__(self,
+                                    n_components_per_class=n_components, covariance_type=covariance_type, tol=tol,
+                                    reg_covar=reg_covar, max_iter=max_iter, n_init=n_init, init_params=init_params,
+                                    classes_init=classes_init, weights_init=weights_init, use_weights=use_weights,
+                                    means_init=means_init, precisions_init=precisions_init,
+                                    random_state=random_state, warm_start=warm_start, verbose=verbose,
+                                    verbose_interval=verbose_interval)
+
+    def _m_step(self, X, log_resp):
+        """M step.
+
+        Parameters
+        ----------
+        X : array-like, shape (n_samples, n_features)
+
+        log_resp : array-like, shape (n_samples, n_components)
+            Logarithm of the posterior probabilities (or responsibilities) of
+            the point of each sample in X.
+        """
+        # TODO: provide reliable class info to stratified subsampling if multiple components per class used.
+        n_samples, _ = X.shape
+        random_state = check_random_state(self.random_state)
+        self.weights_, self.means_, self.covariances_ = (
+            _estimate_tidi_gaussian_parameters(X, np.exp(log_resp), self.reg_covar, self.covariance_type))
         self.weights_ /= n_samples
         self.precisions_cholesky_ = _compute_precision_cholesky(
             self.covariances_, self.covariance_type)

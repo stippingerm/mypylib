@@ -16,7 +16,8 @@ from sklearn.utils.fixes import logsumexp
 from sklearn.utils import check_random_state
 from sklearn.mixture.gaussian_mixture import GaussianMixture, _compute_precision_cholesky, _compute_log_det_cholesky
 from sklearn.mixture.bayesian_mixture import BayesianGaussianMixture as _BaseBayesianGaussianMixture
-from .gaussian_mixture import _fullCorr, _tiedCorr, _diagCorr, _sphericalCorr, _estimate_fair_gaussian_parameters
+from .gaussian_mixture import (_fullCorr, _tiedCorr, _diagCorr, _sphericalCorr,
+                               _estimate_fair_gaussian_parameters, _estimate_tidi_gaussian_parameters)
 
 from sklearn.utils import check_array
 from sklearn.utils.validation import check_is_fitted
@@ -1444,6 +1445,56 @@ class BayesianFairTiedClassifier(BayesianGaussianClassifier):
         self._estimate_weights(nk)
         self._estimate_means(nk, xk)
         self._estimate_precisions(fk, xk, sk)
+
+
+class BayesianDiagTiedClassifier(BayesianGaussianClassifier):
+    def __init__(self, n_components_per_class=1, covariance_type='tied', tol=1e-3,
+                 reg_covar=1e-6, max_iter=100, n_init=1, init_params='kmeans', use_weights=True,
+                 classes_init=None, weight_concentration_prior_type='dirichlet_process',
+                 weight_concentration_prior=None,
+                 mean_precision_prior=None, mean_prior=None,
+                 degrees_of_freedom_prior=None, covariance_prior=None,
+                 use_uninformed_prior=False, enforce_valid_posterior_predictive=True,
+                 n_integral_points=100, random_state=None, warm_start=False, verbose=0,
+                 verbose_interval=10, progress_bar=None):
+        if covariance_type != 'diag':
+            raise ValueError('Diag tied estimation may be requested for "diag" covariances only.')
+        BayesianGaussianClassifier.__init__(self,
+                                            n_components_per_class=n_components_per_class,
+                                            covariance_type=covariance_type, tol=tol,
+                                            reg_covar=reg_covar, max_iter=max_iter, n_init=n_init,
+                                            init_params=init_params,
+                                            use_weights=use_weights, classes_init=classes_init,
+                                            weight_concentration_prior_type=weight_concentration_prior_type,
+                                            weight_concentration_prior=weight_concentration_prior,
+                                            mean_precision_prior=mean_precision_prior, mean_prior=mean_prior,
+                                            degrees_of_freedom_prior=degrees_of_freedom_prior,
+                                            covariance_prior=covariance_prior,
+                                            use_uninformed_prior=use_uninformed_prior,
+                                            enforce_valid_posterior_predictive=enforce_valid_posterior_predictive,
+                                            n_integral_points=n_integral_points, random_state=random_state,
+                                            warm_start=warm_start, verbose=verbose,
+                                            verbose_interval=verbose_interval, progress_bar=progress_bar)
+
+    def _m_step(self, X, log_resp):
+        """M step.
+
+        Parameters
+        ----------
+        X : array-like, shape (n_samples, n_features)
+
+        log_resp : array-like, shape (n_samples, n_components)
+            Logarithm of the posterior probabilities (or responsibilities) of
+            the point of each sample in X.
+        """
+        n_samples, _ = X.shape
+        random_state = check_random_state(self.random_state)
+
+        nk, xk, sk = _estimate_tidi_gaussian_parameters(
+            X, np.exp(log_resp), self.reg_covar, self.covariance_type)
+        self._estimate_weights(nk)
+        self._estimate_means(nk, xk)
+        self._estimate_precisions(nk, xk, sk)
 
 
 def exampleClassifier(n_components, n_features, covariance_type='full', random_state=None):
