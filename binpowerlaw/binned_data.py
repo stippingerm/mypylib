@@ -153,9 +153,11 @@ def find_xmin_xmax_ks(edges, counts, grid=None, scaling_range=10, max_range=np.i
     :param counts: counts in the bin, shape (n,)
     :param grid: a smaller grid to do the search, for best results use a subset of values given in `edges`, shape (m,)
     :param scaling_range, max_range: the minimal and maximal factor between `xmin` and `xmax`, float
+    :param clip_low, clip_high: anchors for the maximal `xmin` and minimal `xmax`
     :param req_samples: the minimal number of samples in the chosen interval, int
     :param no_xmax: assume that xmax=np.inf, bool
     :param ranking: do not select best match but return all results ordered decreasingly
+                    by the goodness of fit (KS-distance)
     :keyword ...: parameters to pass to minimize call
     :return ahat, xmin, xmax, ks:
     """

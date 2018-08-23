@@ -182,9 +182,12 @@ def find_xmin_xmax_ks(points, counts, grid=None, scaling_range=10, max_range=np.
     :param counts: number of occurrences for `points`, shape (n,)
     :param grid: inspected boundary values, increasing, shape (m,)
     :param scaling_range, max_range: the minimal and maximal factor between `xmin` and `xmax`, float
+    :param clip_low, clip_high: anchors for the maximal `xmin` and minimal `xmax`
     :param req_samples: the minimal number of samples in the chosen interval, int
     :param no_xmax: assume that xmax=np.inf, bool
     :param discrete: interpret as a discrete power-law (genrealized zipf) distribution
+    :param ranking: do not select best match but return all results ordered decreasingly
+                    by the goodness of fit (KS-distance)
     :return xmin, xmax, ahat, ks:
     """
     points, counts = _check_points_counts(points, counts, min_range=scaling_range)
