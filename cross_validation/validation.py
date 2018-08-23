@@ -60,6 +60,12 @@ from sklearn.preprocessing import LabelEncoder
 from sklearn.utils.validation import check_consistent_length
 from itertools import product as iter_product
 from sklearn.exceptions import DataConversionWarning
+try:
+    from .timeout_decorator import _Timeout
+except (ModuleNotFoundError, ImportError):
+    def _Timeout(fun, timeout_exception, exception_message, limit):
+        del timeout_exception, exception_message, limit
+        return fun
 
 __all__ = ['cross_validate', 'cross_val_score', 'cross_val_predict', 'nested_cross_validate',
            'concatenate_score_dicts']
@@ -1330,15 +1336,15 @@ def safe_features(X, indices):
 
 
 def _cross_validate_inner(est_key, train_key, test_key, feat, est, train, y, groups, scoring, cv, test, cv_params,
-                          nested, on_failure):
+                          nested, on_failure, timeout):
     # delay feature selection and cloning as it may require a lot of memory
     train, test = safe_features(train, feat), (test if test is None else safe_features(test, feat))
     cloned_est = clone(est)
     try:
-        if nested:
-            result = nested_cross_validate(cloned_est, train, y, groups, scoring, cv, test, **cv_params)
-        else:
-            result = cross_validate(cloned_est, train, y, groups, scoring, cv, test, **cv_params)
+        my_function = nested_cross_validate if nested else cross_validate
+        if timeout is not None:
+            my_function = _Timeout(my_function, TimeoutError, None, timeout)
+        result = my_function(cloned_est, train, y, groups, scoring, cv, test, **cv_params)
     except Exception as e:
         msg = 'Failure to cross-validate %s' % est
         reason = 'For the following reason: %s: %s' % (type(e), e)
@@ -1379,7 +1385,7 @@ def cross_validate_iterator(estimator, X, y=None, groups=None, scoring=None, cv=
                             feature_selection_generator=None, n_feature=0, how='product',
                             progress_bar=None, progress_params=None, n_jobs=1, verbose=0, fit_params=None,
                             pre_dispatch='2*n_jobs', return_train_score="warn", nested=False,
-                            on_failure='raise'):
+                            on_failure='raise', timeout=None):
     """
     Iterate over inputs to cross-validation to keep the parallel execution queue filled.
 
@@ -1460,12 +1466,12 @@ def cross_validate_iterator(estimator, X, y=None, groups=None, scoring=None, cv=
 
     # We need to clone the estimator to make sure that all the folds are
     # independent, and that it is pickle-able.
-    parallel = Parallel(n_jobs=n_jobs, verbose=verbose, pre_dispatch=pre_dispatch)
+    parallel = Parallel(n_jobs=n_jobs, verbose=verbose, pre_dispatch=pre_dispatch, timeout=None)
 
     results = parallel(
         (delayed(_cross_validate_inner)(
             est_key, train_key, test_key, feat, est, train, (y if same_y else y[train_key]),
-            groups, scoring, cv, test, cv_params, nested, on_failure))
+            groups, scoring, cv, test, cv_params, nested, on_failure, timeout))
         for (est_key, est), (train_key, train), (test_key, test), n_feat in
         progress_bar(conditions_iterator, **progress_params)
         # no harm to convert to list, this is is going to be stored in memory  anyway
