@@ -1341,7 +1341,7 @@ def _cross_validate_inner(est_key, train_key, test_key, feat, est, train, y, gro
             result = cross_validate(cloned_est, train, y, groups, scoring, cv, test, **cv_params)
     except Exception as e:
         msg = 'Failure to cross-validate %s' % est
-        reason = 'For the following reason: %s' % e
+        reason = 'For the following reason: %s: %s' % (type(e), e)
         if on_failure == 'ignore':
             pass
         elif on_failure == 'report':
@@ -1372,7 +1372,7 @@ class random_feature_selector():
         self.n_total = int(n_total)
 
     def __call__(self, n_select):
-        return self.random_state.choice(self.n_total, 1, replace=False)
+        return [self.random_state.choice(self.n_total, n_select, replace=False)]
 
 
 def cross_validate_iterator(estimator, X, y=None, groups=None, scoring=None, cv=None, X_for_test=None,
@@ -1441,6 +1441,8 @@ def cross_validate_iterator(estimator, X, y=None, groups=None, scoring=None, cv=
     if progress_bar is None:
         progress_bar = _no_progress_bar
 
+    # TODO: random feature selection gets a different set of features for each classifier,
+    # not only when n_features changes, in addition, it does not play well with the purpose of repeated K-fold
     if feature_selection_generator is None:
         feature_selection_generator = _default_feature_selection
         inner_progress_bar = _no_progress_bar
