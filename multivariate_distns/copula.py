@@ -397,9 +397,8 @@ def _log_jacobian(stat, data, params):
 
 
 def nan_to_neg_inf(x):
-    y = x.copy()
-    y[np.isnan(y)] = -np.inf
-    return y
+    result = np.where(np.isnan(x), -np.inf, x)
+    return result
 
 
 _mj_doc_default_callparams = """\
@@ -750,7 +749,7 @@ class histogram_normalization_gen(multivariate_transform_base):
         marginal_logpdf[np.isinf(marginal_logpdf)] = -np.inf
 
         joint_logpdf = self.joint_gen.logpdf(uniformized, *joint)
-        joint_logpdf[np.isnan(joint_logpdf)] = -np.inf
+        joint_logpdf = nan_to_neg_inf(joint_logpdf)
 
         # TODO: make sanitization optional
         return joint_logpdf + marginal_logpdf
@@ -885,7 +884,7 @@ class copula_base_gen(multivariate_transform_base):
         marginal_logpdf[np.isinf(marginal_logpdf)] = -np.inf
 
         joint_logpdf = self.joint_gen.logpdf(internal, *joint)
-        joint_logpdf[np.isnan(joint_logpdf)] = -np.inf
+        joint_logpdf = nan_to_neg_inf(joint_logpdf)
 
         # TODO: make sanitization optional, however mvn.pdf(-inf, -inf) yields nan
         return joint_logpdf + marginal_logpdf
