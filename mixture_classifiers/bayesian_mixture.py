@@ -275,7 +275,7 @@ def _estimate_log_t_prob(X, counts_means, means, count_precis, precisions_chol, 
     if covariance_type == 'tied':
         count_precis = np.sum(count_precis)
 
-    # Contrary to the original bishop book, the shape matrix is normalized,
+    # Contrary to the original Bishop book, the shape matrix is normalized,
     # that is, it represents the maximum a posteriori covariances. I believe,
     # the reason for this is to calculate maximum a posteriori probabilities
     # the same way as in sklearn.mixture_models.GaussianMixture.

@@ -84,7 +84,7 @@ def _estimate_gaussian_covariances_tidi(resp, X, nk, means, reg_covar):
     -------
     covariance : array, shape (1, n_features)
         The tied diagonal covariance matrix of the components.
-        Note: shaoe conforms diagonal calculations.
+        Note: shape conforms diagonal calculations.
     """
     avg_X2 = np.sum(X * X, axis=0)
     avg_means2 = np.dot(nk, means*means)

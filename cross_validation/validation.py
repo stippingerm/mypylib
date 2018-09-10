@@ -1193,8 +1193,9 @@ def _aggregate_score_dicts(scores):
      'b': array([10,  2,  3])}
     """
     out = {}
-    for key in scores[0]:
-        out[key] = np.asarray([score[key] for score in scores])
+    if len(scores):
+        for key in scores[0]:
+            out[key] = np.asarray([score[key] for score in scores])
     return out
 
 
@@ -1337,6 +1338,47 @@ def safe_features(X, indices):
 
 def _cross_validate_inner(est_key, train_key, test_key, feat, est, train, y, groups, scoring, cv, test, cv_params,
                           nested, on_failure, timeout):
+    """
+    Inner loop for cross-validating a selected classifier.
+
+    Parameters
+    ----------
+    est_key, train_key, test_key:
+        Identifiers to be passed through unchanged.
+    feat: array of bools or ordinals
+        Selected features
+    est: estimator object implementing ‘fit’
+        The object to use to fit the data.
+    train, test: array-like, shape (n_samples, n_features)
+        The data to fit and test, n_samples allowed to differ for train and test
+    y: array-like, shape (n_samples,)
+        The target variable to try to predict in the case of supervised learning.
+    groups: array-like, with shape (n_samples,), optional
+        Group labels for the samples used while splitting the dataset into train/test set.
+    scoring: string, callable, list/tuple, dict or None
+        See `cross_validate`.
+    cv: int, cross-validation generator or an iterable
+        Determines the cross-validation splitting strategy.
+    cv_params: dict
+        Arguments to pass to `cross_validate`.
+    nested: bool
+        Whether to perform nested cross-validation. Typically used in hyperparameter selection.
+    on_failure: str('ignore' | 'report' | 'warn' | 'raise'), default: 'raise'
+        How to handle cross-validation errors
+    timeout: float
+        Timeout for task to complete in seconds. No timeout is implied if 0.
+
+    Returns
+    -------
+    est_key, train_key, test_key:
+        Just like the input
+    n_features: int,
+        len(feat)
+    feat: array-like
+        The feature selector used
+    result: dict of float arrays of shape=(n_splits,)
+        The output of `cross_validate` or `nested_cross_validate`
+    """
     # delay feature selection and cloning as it may require a lot of memory
     train, test = safe_features(train, feat), (test if test is None else safe_features(test, feat))
     cloned_est = clone(est)
@@ -1391,25 +1433,46 @@ def cross_validate_iterator(estimator, X, y=None, groups=None, scoring=None, cv=
 
     Parameters
     ----------
-    estimator: estimator or dict of any to estimator
+    estimator: estimator or dict of any to estimator implementing ‘fit’
+        The object(s) to use to fit the data.
     X: array-like or dict of any to array-like
+        The data to fit. Can be for example a list, or an array.
     y: array-like or dict of any to array_like
+        The target variable to try to predict in the case of supervised learning.
     groups: array-like # TODO: handle them if other are dict
-    scoring: scorer
-    cv: splitter
+        Group labels for the samples used while splitting the dataset into train/test set.
+    scoring: string, callable, list/tuple, dict or None
+        Defines the scorer.
+    cv: int, cross-validation generator or an iterable
+        Determines the cross-validation splitting strategy.
     X_for_test: array-like or dict of any to array-like
+        The data to test. Can be for example a list, or an array.
     feature_selection_generator: callable
+        Must take one variable: the number of features to select.
     n_feature: int, array-like
+        The number of features to fit and test. 0 means use them all.
     how: str('product')|str('zip')
+        How to iterate over the training and test data:
+        * 'zip' uses them in parallel by key
+        * 'product' forms a Cartesian product of the keys
     progress_bar: callable
+        tqdm-like
     progress_params: dict
+        Parameters to pass to the progress bar
     n_jobs: int
-    verbose: bool
+        The number of CPUs to use to do the computation. -1 means ‘all CPUs’.
+    verbose: int
+        The verbosity level.
     fit_params: dict
-    pre_dispatch: str
+        Parameters to pass to the fit method of the estimator.
+    pre_dispatch: int, or string
+        Controls the number of jobs that get dispatched during parallel execution.
     return_train_score: bool
+        Whether to include train scores.
     nested: bool
-    on_failure: ['ignore', 'report', 'warn', 'raise'], how to handle errors raised by estimators, default: 'raise'
+        Whether to perform nested cross-validation. Typically used in hyperparameter selection.
+    on_failure: str('ignore' | 'report' | 'warn' | 'raise'), default: 'raise'
+        How to handle errors raised by estimators
 
     Returns
     -------
