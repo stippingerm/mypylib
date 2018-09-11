@@ -1135,8 +1135,9 @@ class multivariate_corr_only_normal_gen(multivariate_normal_gen):
     """Example extension to the multivariate normal distribution with
        ML fit capability"""
 
-    def __init__(self, *args, fit_mean=False, clip=True, **kwargs):
+    def __init__(self, *args, fit_mean=False, reg_covar=1e-6, clip=True, **kwargs):
         self._fit_mean = fit_mean
+        self._reg_covar = reg_covar
         if clip:
             min_max = [0, 1] + np.array([1, -1]) * np.finfo(float).epsneg
             self.clip_bounds = norm.ppf(min_max)
@@ -1169,9 +1170,11 @@ class multivariate_corr_only_normal_gen(multivariate_normal_gen):
         X = np.array(X, ndmin=1)
         X = np.clip(X, *self.clip_bounds)
         mn = np.mean(X, axis=0)
+        n_dim = len(mn)
         if not self._fit_mean:
             mn = np.zeros_like(mn)
         co = np.corrcoef(X, rowvar=False)
+        co.flat[::n_dim + 1] += self._reg_covar
         return mn, co
 
 
