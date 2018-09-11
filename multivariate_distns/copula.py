@@ -401,6 +401,11 @@ def nan_to_neg_inf(x):
     return result
 
 
+def inf_to_neg_inf(x):
+    result = np.where(np.isinf(x), -np.inf, x)
+    return result
+
+
 _mj_doc_default_callparams = """\
 joint : tuple
     Parameters of the joint distribution
@@ -746,7 +751,7 @@ class histogram_normalization_gen(multivariate_transform_base):
         """
         uniformized = _transform_to_hypercube(stat=self.marginal_gen, data=x, params=marginal)
         marginal_logpdf = _log_jacobian(stat=self.marginal_gen, data=x, params=marginal)
-        marginal_logpdf[np.isinf(marginal_logpdf)] = -np.inf
+        marginal_logpdf = inf_to_neg_inf(marginal_logpdf)
 
         joint_logpdf = self.joint_gen.logpdf(uniformized, *joint)
         joint_logpdf = nan_to_neg_inf(joint_logpdf)
@@ -881,7 +886,7 @@ class copula_base_gen(multivariate_transform_base):
         """
         internal = _transform_to_domain_of_def(stat=self.marginal_gen, data=x, params=marginal)
         marginal_logpdf = -_log_jacobian(stat=self.marginal_gen, data=internal, params=marginal)
-        marginal_logpdf[np.isinf(marginal_logpdf)] = -np.inf
+        marginal_logpdf = inf_to_neg_inf(marginal_logpdf)
 
         joint_logpdf = self.joint_gen.logpdf(internal, *joint)
         joint_logpdf = nan_to_neg_inf(joint_logpdf)
@@ -1026,7 +1031,7 @@ class archimedean_copula_gen(copula_base_gen):
         internal = _transform_to_domain_of_def(stat=self.marginal_gen, data=x, params=marginal)
         marginal_logpdf = -_log_jacobian(stat=self.marginal_gen, data=internal, params=marginal)
         # marginal_logpdf = -np.log(np.abs(_jacobian(stat=self.marginal_gen, data=internal, params=marginal)))
-        marginal_logpdf[np.isinf(marginal_logpdf)] = -np.inf
+        marginal_logpdf = inf_to_neg_inf(marginal_logpdf)
 
         dim = internal.shape[-1]
         # joint_pdf = derivative(lambda x0: self.joint_gen.cdf(x0, *joint), np.sum(internal, axis=-1), dx=1e-6, n=dim)
@@ -1130,8 +1135,13 @@ class multivariate_corr_only_normal_gen(multivariate_normal_gen):
     """Example extension to the multivariate normal distribution with
        ML fit capability"""
 
-    def __init__(self, *args, fit_mean=False, **kwargs):
+    def __init__(self, *args, fit_mean=False, clip=True, **kwargs):
         self._fit_mean = fit_mean
+        if clip:
+            min_max = [0, 1] + np.array([1, -1]) * np.finfo(float).epsneg
+            self.clip_bounds = norm.ppf(min_max)
+        else:
+            self.clip_bounds = [None, None]
         super(multivariate_normal_gen, self).__init__(*args, **kwargs)
 
     # def logpdf(self, x, mean=None, cov=1, allow_singular=False):
@@ -1157,6 +1167,7 @@ class multivariate_corr_only_normal_gen(multivariate_normal_gen):
 
         """
         X = np.array(X, ndmin=1)
+        X = np.clip(X, *self.clip_bounds)
         mn = np.mean(X, axis=0)
         if not self._fit_mean:
             mn = np.zeros_like(mn)
