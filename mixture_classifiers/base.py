@@ -122,6 +122,7 @@ class MixtureClassifierMixin(ClassifierMixin):
     def __init__(self):
         self.classes_ = np.array([])
         self._refuse_inf_resp = True
+        self._e_step_ignore_nan = True
 
     def _make_responsibilities(self, y):
         if np.any(self.n_components_per_class != 1):
@@ -216,6 +217,7 @@ class MixtureClassifierMixin(ClassifierMixin):
         # if we enable warm_start, we will have a unique initialisation
         do_init = not (self.warm_start and hasattr(self, 'converged_'))
         n_init = self.n_init if do_init else 1
+        e_step_errstate = {True: {'invalid': 'ignore'}, False: {}}[self._e_step_ignore_nan]
 
         # Addendum N°1: if analytically solvable, do not iterate
         analytic_solution = np.all(self.n_components_per_class == 1)
@@ -237,12 +239,16 @@ class MixtureClassifierMixin(ClassifierMixin):
             for n_iter in range(max_iter):
                 prev_lower_bound = self.lower_bound_
 
-                log_prob_norm, log_resp = self._e_step(X)
+                # Addendum N°4: optionally ignore eventual NaNs
+                with np.errstate(**e_step_errstate):
+                    log_prob_norm, log_resp = self._e_step(X)
                 # Addendum N°2: limit responsibilities to classes
                 log_resp = self._limit_log_resp(log_resp, y)
                 self._m_step(X, log_resp)
+                # Addendum N°3: convert infinities to large finite numbers
+                # this makes sure lower_bound_ gets larger then the initial -inf
                 self.lower_bound_ = self._compute_lower_bound(
-                    log_resp, log_prob_norm)
+                    log_resp, np.nan_to_num(log_prob_norm))
 
                 change = self.lower_bound_ - prev_lower_bound
                 self._print_verbose_msg_iter_end(n_iter, change)
