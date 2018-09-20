@@ -240,6 +240,7 @@ class MixtureClassifierMixin(ClassifierMixin):
                 prev_lower_bound = self.lower_bound_
 
                 # Addendum N°4: optionally ignore eventual NaNs
+                # but note, they occur in predict_proba (not overridden) too
                 with np.errstate(**e_step_errstate):
                     log_prob_norm, log_resp = self._e_step(X)
                 # Addendum N°2: limit responsibilities to classes

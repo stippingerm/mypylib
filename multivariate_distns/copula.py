@@ -1637,6 +1637,9 @@ def make_copula(marginal, joint, iid_marginals=True):
         marginal_gen = marginal
     if joint == 'gaussian':
         tuning['dtype_joint'] = None
+    else:
+        # Remove this when Archimedean copulas are modified to work with a single copy of the parameter.
+        tuning['dtype_joint'] = None
     joint_gen = allowed_joint[joint]
 
     iid_marginals = bool(iid_marginals)
