@@ -190,6 +190,30 @@ def join_multi(df1, df2, left_on=None, right_on=None, on=None, **kwarg):
     return result.set_index(res_idx)
 
 
+def named_loc(df, *args, **kwargs):
+    """named_loc(df, name1, crit1, ..., name=crit, ...)
+
+    Take a subset of rows where the query for conditions evaluates True."""
+    keep = np.full(len(df.index), True)
+    matlab_style_params = np.array(args, dtype=object).reshape((-1,2), order='C')
+    python_style_params = np.array(list(kwargs.items()), dtype=object).reshape((-1,2))
+    for name, crit in np.concatenate((matlab_style_params, python_style_params)):
+        try:
+            # assume 'name' is a column
+            values = df.loc[:, name].values
+        except (KeyError, pd.core.indexing.IndexingError):
+            # fall back to index (work either on DataFrame or Series)
+            values = df.index.get_level_values(name)
+        try:
+            # assume 'crit' is callable
+            passed = list(map(crit, values))
+        except TypeError:
+            # fall back to comparison
+            passed = np.isin(values, crit)
+        keep = passed & keep
+    return df.loc[keep]
+
+
 def outer(left, right, fun=None, **kwargs):
     """Bring two special DataFrames to the same form (same shape and index/columns), then
     analogously to outer product, perform custom function over selected index levels.
@@ -201,6 +225,7 @@ def outer(left, right, fun=None, **kwargs):
         `left` is allowed to have extra index level while `right` may have an extra column level
 
     fun: callable, optional
+        The function must take two array-like arguments
 
     **kwargs: optional arguments to be passed to function
 
