@@ -11,9 +11,10 @@
 import numpy as np
 
 # sklearn.mixture.gaussian_mixture
-from sklearn.mixture.gaussian_mixture import GaussianMixture, _estimate_gaussian_covariances_full, \
-    _estimate_gaussian_covariances_tied, _estimate_gaussian_covariances_diag, \
-    _estimate_gaussian_covariances_spherical, _compute_precision_cholesky
+from sklearn.mixture.gaussian_mixture import GaussianMixture as _BaseGaussianMixture, \
+    _estimate_gaussian_covariances_full, _estimate_gaussian_covariances_tied, \
+    _estimate_gaussian_covariances_diag, _estimate_gaussian_covariances_spherical, \
+    _compute_precision_cholesky
 from sklearn.utils import check_random_state
 from sklearn.utils import check_array
 from sklearn.utils.validation import check_is_fitted
@@ -24,8 +25,8 @@ from sklearn.mixture.base import _check_X
 from sklearn.model_selection import StratifiedKFold
 from .base import MixtureClassifierMixin
 
-
 from collections import namedtuple
+
 _feature_mapper = namedtuple('_feature_mapper', ['shape', 'tied', 'fair'])
 
 # Effective covariance --> Cov shape in sklearn API; same among components; reduce data amount to 1/n_components
@@ -43,6 +44,8 @@ _feature_mapping = {
     'tied corr': _feature_mapper('full', True, False),
     'full': _feature_mapper('full', False, False),  # nothing shared
 }
+
+
 # Note: although some ties would allow simpler shapes (i.e., for spherical and diag) but rather
 # we use fallback to a broader shape to spare the effort of implementing the corresponding calculations.
 
@@ -111,7 +114,7 @@ def _estimate_gaussian_covariances_tied_diag(resp, X, nk, means, reg_covar):
     """
     del resp
     avg_X2 = np.sum(X * X, axis=0)
-    avg_means2 = np.dot(nk, means*means)
+    avg_means2 = np.dot(nk, means * means)
     covariance = avg_X2 - avg_means2
     covariance /= nk.sum()
     covariance += reg_covar
@@ -254,6 +257,210 @@ def _estimate_gaussian_parameters(X, resp, reg_covar, advanced_covariance_type, 
                        }[covariance_type](resp, X, nk, means, reg_covar)
         nk_fair = nk
     return nk, nk_fair, means, covariances
+
+
+class GaussianMixture(_BaseGaussianMixture):
+    """Gaussian Mixture.
+
+    Representation of a Gaussian mixture model probability distribution.
+    This class allows to estimate the parameters of a Gaussian mixture
+    distribution.
+
+    Read more in the :ref:`User Guide <gmm>`.
+
+    .. versionadded:: 0.18
+
+    Parameters
+    ----------
+    n_components : int, defaults to 1.
+        The number of mixture components.
+
+    covariance_type : {'full' (default), 'tied', 'diag', 'spherical'}
+        String describing the type of covariance parameters to use.
+        Must be one of:
+
+        'full'
+            each component has its own general covariance matrix
+        'fair corr', 'tied corr'
+            all components share the same general correlation matrix
+            while each component scales it to match its own variances
+        'fair', 'tied'
+            all components share the same general covariance matrix
+        'diag'
+            each component has its own diagonal covariance matrix
+        'fair diag', 'tied diag'
+            all components share the same diagonal covariance matrix
+        'spherical'
+            each component has its own single variance
+        'fair spehrical', 'tied spherical'
+            all components share the same single variance
+
+        In the above, 'fair' indicates that covariances are estimated
+        from data subsampled to the observations contained in an average
+        component.
+
+    tol : float, defaults to 1e-3.
+        The convergence threshold. EM iterations will stop when the
+        lower bound average gain is below this threshold.
+
+    reg_covar : float, defaults to 1e-6.
+        Non-negative regularization added to the diagonal of covariance.
+        Allows to assure that the covariance matrices are all positive.
+
+    max_iter : int, defaults to 100.
+        The number of EM iterations to perform.
+
+    n_init : int, defaults to 1.
+        The number of initializations to perform. The best results are kept.
+
+    init_params : {'kmeans', 'random'}, defaults to 'kmeans'.
+        The method used to initialize the weights, the means and the
+        precisions.
+        Must be one of::
+
+            'kmeans' : responsibilities are initialized using kmeans.
+            'random' : responsibilities are initialized randomly.
+
+    weights_init : array-like, shape (n_components, ), optional
+        The user-provided initial weights, defaults to None.
+        If it None, weights are initialized using the `init_params` method.
+
+    means_init : array-like, shape (n_components, n_features), optional
+        The user-provided initial means, defaults to None,
+        If it None, means are initialized using the `init_params` method.
+
+    precisions_init : array-like, optional.
+        The user-provided initial precisions (inverse of the covariance
+        matrices), defaults to None.
+        If it None, precisions are initialized using the 'init_params' method.
+        The shape depends on 'covariance_type'::
+
+            (n_components,)                        if 'spherical',
+            (n_features, n_features)               if 'tied',
+            (n_components, n_features)             if 'diag',
+            (n_components, n_features, n_features) if 'full'
+
+    random_state : int, RandomState instance or None, optional (default=None)
+        If int, random_state is the seed used by the random number generator;
+        If RandomState instance, random_state is the random number generator;
+        If None, the random number generator is the RandomState instance used
+        by `np.random`.
+
+    warm_start : bool, default to False.
+        If 'warm_start' is True, the solution of the last fitting is used as
+        initialization for the next call of fit(). This can speed up
+        convergence when fit is called several times on similar problems.
+        In that case, 'n_init' is ignored and only a single initialization
+        occurs upon the first call.
+        See :term:`the Glossary <warm_start>`.
+
+    verbose : int, default to 0.
+        Enable verbose output. If 1 then it prints the current
+        initialization and each iteration step. If greater than 1 then
+        it prints also the log probability and the time needed
+        for each step.
+
+    verbose_interval : int, default to 10.
+        Number of iteration done before the next print.
+
+    Attributes
+    ----------
+    weights_ : array-like, shape (n_components,)
+        The weights of each mixture components.
+
+    means_ : array-like, shape (n_components, n_features)
+        The mean of each mixture component.
+
+    covariances_ : array-like
+        The covariance of each mixture component.
+        The shape depends on `covariance_type`::
+
+            (n_components,)                        if 'spherical',
+            (n_features, n_features)               if 'tied',
+            (n_components, n_features)             if 'diag',
+            (n_components, n_features, n_features) if 'full'
+
+    precisions_ : array-like
+        The precision matrices for each component in the mixture. A precision
+        matrix is the inverse of a covariance matrix. A covariance matrix is
+        symmetric positive definite so the mixture of Gaussian can be
+        equivalently parameterized by the precision matrices. Storing the
+        precision matrices instead of the covariance matrices makes it more
+        efficient to compute the log-likelihood of new samples at test time.
+        The shape depends on `covariance_type`::
+
+            (n_components,)                        if 'spherical',
+            (n_features, n_features)               if 'tied',
+            (n_components, n_features)             if 'diag',
+            (n_components, n_features, n_features) if 'full'
+
+    precisions_cholesky_ : array-like
+        The cholesky decomposition of the precision matrices of each mixture
+        component. A precision matrix is the inverse of a covariance matrix.
+        A covariance matrix is symmetric positive definite so the mixture of
+        Gaussian can be equivalently parameterized by the precision matrices.
+        Storing the precision matrices instead of the covariance matrices makes
+        it more efficient to compute the log-likelihood of new samples at test
+        time. The shape depends on `covariance_type`::
+
+            (n_components,)                        if 'spherical',
+            (n_features, n_features)               if 'tied',
+            (n_components, n_features)             if 'diag',
+            (n_components, n_features, n_features) if 'full'
+
+    converged_ : bool
+        True when convergence was reached in fit(), False otherwise.
+
+    n_iter_ : int
+        Number of step used by the best fit of EM to reach the convergence.
+
+    lower_bound_ : float
+        Lower bound value on the log-likelihood (of the training data with
+        respect to the model) of the best fit of EM.
+
+    See Also
+    --------
+    BayesianGaussianMixture : Gaussian mixture model fit with a variational
+        inference.
+    """
+
+    def __init__(self, n_components=1, covariance_type='full', advanced_covariance_type=None, tol=1e-3,
+                 reg_covar=1e-6, max_iter=100, n_init=1, init_params='kmeans',
+                 weights_init=None, means_init=None, precisions_init=None,
+                 random_state=None, warm_start=False,
+                 verbose=0, verbose_interval=10):
+        if advanced_covariance_type is None:
+            advanced_covariance_type = covariance_type
+        else:
+            covariance_type = _feature_mapping[advanced_covariance_type].shape
+        _BaseGaussianMixture.__init__(self,
+                                      n_components=n_components, covariance_type=covariance_type, tol=tol,
+                                      reg_covar=reg_covar, max_iter=max_iter, n_init=n_init, init_params=init_params,
+                                      weights_init=weights_init, means_init=means_init, precisions_init=precisions_init,
+                                      random_state=random_state, warm_start=warm_start, verbose=verbose,
+                                      verbose_interval=verbose_interval)
+        self.advanced_covariance_type = advanced_covariance_type
+
+    def _m_step(self, X, log_resp):
+        """M step.
+
+        Parameters
+        ----------
+        X : array-like, shape (n_samples, n_features)
+
+        log_resp : array-like, shape (n_samples, n_components)
+            Logarithm of the posterior probabilities (or responsibilities) of
+            the point of each sample in X.
+        """
+        # TODO: provide reliable class info to stratified subsampling if multiple components per class used.
+        n_samples, _ = X.shape
+        random_state = check_random_state(self.random_state)
+        self.weights_, _, self.means_, self.covariances_ = (
+            _estimate_gaussian_parameters(X, np.exp(log_resp), self.reg_covar,
+                                          self.advanced_covariance_type, random_state))
+        self.weights_ /= n_samples
+        self.precisions_cholesky_ = _compute_precision_cholesky(
+            self.covariances_, self.covariance_type)
 
 
 class GaussianClassifier(MixtureClassifierMixin, GaussianMixture):
@@ -424,13 +631,14 @@ class GaussianClassifier(MixtureClassifierMixin, GaussianMixture):
     # TODO: when sampling assign learned class instead of ordinals
     # (this can be done by an overload that hooks to the super class)
 
-    def __init__(self, n_components_per_class=1, covariance_type='full', tol=1e-3,
+    def __init__(self, n_components_per_class=1, covariance_type='full', advanced_covariance_type=None, tol=1e-3,
                  reg_covar=1e-6, max_iter=100, n_init=1, init_params='kmeans', use_weights=True,
                  classes_init=None, weights_init=None, means_init=None, precisions_init=None,
                  random_state=None, warm_start=False,
                  verbose=0, verbose_interval=10):
         GaussianMixture.__init__(self,
-                                 n_components=n_components_per_class, covariance_type=covariance_type, tol=tol,
+                                 n_components=n_components_per_class, covariance_type=covariance_type,
+                                 advanced_covariance_type=advanced_covariance_type, tol=tol,
                                  reg_covar=reg_covar, max_iter=max_iter, n_init=n_init, init_params=init_params,
                                  weights_init=weights_init, means_init=means_init, precisions_init=precisions_init,
                                  random_state=random_state, warm_start=warm_start, verbose=verbose,
@@ -502,114 +710,22 @@ class GaussianClassifier(MixtureClassifierMixin, GaussianMixture):
         self.n_components = len(self.means_)
 
 
-class FairTiedClassifier(GaussianClassifier):
-    def __init__(self, n_components=1, covariance_type='tied', tol=1e-3,
-                 reg_covar=1e-6, max_iter=100, n_init=1, init_params='kmeans',
-                 classes_init=None, weights_init=None, use_weights=True, means_init=None, precisions_init=None,
-                 random_state=None, warm_start=False,
-                 verbose=0, verbose_interval=10):
-        if covariance_type != 'tied':
-            raise ValueError('Fair covariance estimation may be requested for tied covariances only.')
-        GaussianClassifier.__init__(self,
-                                    n_components_per_class=n_components, covariance_type=covariance_type, tol=tol,
-                                    reg_covar=reg_covar, max_iter=max_iter, n_init=n_init, init_params=init_params,
-                                    classes_init=classes_init, weights_init=weights_init, use_weights=use_weights,
-                                    means_init=means_init, precisions_init=precisions_init,
-                                    random_state=random_state, warm_start=warm_start, verbose=verbose,
-                                    verbose_interval=verbose_interval)
-
-    def _m_step(self, X, log_resp):
-        """M step.
-
-        Parameters
-        ----------
-        X : array-like, shape (n_samples, n_features)
-
-        log_resp : array-like, shape (n_samples, n_components)
-            Logarithm of the posterior probabilities (or responsibilities) of
-            the point of each sample in X.
-        """
-        # TODO: provide reliable class info to stratified subsampling if multiple components per class used.
-        n_samples, _ = X.shape
-        random_state = check_random_state(self.random_state)
-        self.weights_, _, self.means_, self.covariances_ = (
-            _estimate_gaussian_parameters(X, np.exp(log_resp), self.reg_covar,
-                                          'fair', random_state))
-        self.weights_ /= n_samples
-        self.precisions_cholesky_ = _compute_precision_cholesky(
-            self.covariances_, self.covariance_type)
+def FairTiedClassifier(*args, covariance_type='tied', **kwargs):
+    if covariance_type != 'tied':
+        raise ValueError('Fair covariance estimation may be requested for tied covariances only.')
+    return GaussianClassifier(*args, advanced_covariance_type='fair', **kwargs)
 
 
-class DiagTiedClassifier(GaussianClassifier):
-    def __init__(self, n_components=1, covariance_type='tied', tol=1e-3,
-                 reg_covar=1e-6, max_iter=100, n_init=1, init_params='kmeans',
-                 classes_init=None, weights_init=None, use_weights=True, means_init=None, precisions_init=None,
-                 random_state=None, warm_start=False,
-                 verbose=0, verbose_interval=10):
-        if covariance_type != 'diag':
-            raise ValueError('Diag tied estimation may be requested for "diag" covariances only.')
-        GaussianClassifier.__init__(self,
-                                    n_components_per_class=n_components, covariance_type=covariance_type, tol=tol,
-                                    reg_covar=reg_covar, max_iter=max_iter, n_init=n_init, init_params=init_params,
-                                    classes_init=classes_init, weights_init=weights_init, use_weights=use_weights,
-                                    means_init=means_init, precisions_init=precisions_init,
-                                    random_state=random_state, warm_start=warm_start, verbose=verbose,
-                                    verbose_interval=verbose_interval)
-
-    def _m_step(self, X, log_resp):
-        """M step.
-
-        Parameters
-        ----------
-        X : array-like, shape (n_samples, n_features)
-
-        log_resp : array-like, shape (n_samples, n_components)
-            Logarithm of the posterior probabilities (or responsibilities) of
-            the point of each sample in X.
-        """
-        # TODO: provide reliable class info to stratified subsampling if multiple components per class used.
-        n_samples, _ = X.shape
-        self.weights_, _, self.means_, self.covariances_ = (
-            _estimate_gaussian_parameters(X, np.exp(log_resp), self.reg_covar, 'tied diag', None))
-        self.weights_ /= n_samples
-        self.precisions_cholesky_ = _compute_precision_cholesky(
-            self.covariances_, self.covariance_type)
+def DiagTiedClassifier(*args, covariance_type='tied', **kwargs):
+    if covariance_type != 'diag':
+        raise ValueError('Diag tied estimation may be requested for "diag" covariances only.')
+    return GaussianClassifier(*args, advanced_covariance_type='tied diag', **kwargs)
 
 
-class CorrTiedClassifier(GaussianClassifier):
-    def __init__(self, n_components=1, covariance_type='tied', tol=1e-3,
-                 reg_covar=1e-6, max_iter=100, n_init=1, init_params='kmeans',
-                 classes_init=None, weights_init=None, use_weights=True, means_init=None, precisions_init=None,
-                 random_state=None, warm_start=False,
-                 verbose=0, verbose_interval=10):
-        if covariance_type != 'full':
-            raise ValueError('Correlation tied estimation may be requested for "full" covariances only.')
-        GaussianClassifier.__init__(self,
-                                    n_components_per_class=n_components, covariance_type=covariance_type, tol=tol,
-                                    reg_covar=reg_covar, max_iter=max_iter, n_init=n_init, init_params=init_params,
-                                    classes_init=classes_init, weights_init=weights_init, use_weights=use_weights,
-                                    means_init=means_init, precisions_init=precisions_init,
-                                    random_state=random_state, warm_start=warm_start, verbose=verbose,
-                                    verbose_interval=verbose_interval)
-
-    def _m_step(self, X, log_resp):
-        """M step.
-
-        Parameters
-        ----------
-        X : array-like, shape (n_samples, n_features)
-
-        log_resp : array-like, shape (n_samples, n_components)
-            Logarithm of the posterior probabilities (or responsibilities) of
-            the point of each sample in X.
-        """
-        # TODO: provide reliable class info to stratified subsampling if multiple components per class used.
-        n_samples, _ = X.shape
-        self.weights_, _, self.means_, self.covariances_ = (
-            _estimate_gaussian_parameters(X, np.exp(log_resp), self.reg_covar, 'tied corr', None))
-        self.weights_ /= n_samples
-        self.precisions_cholesky_ = _compute_precision_cholesky(
-            self.covariances_, self.covariance_type)
+def CorrTiedClassifier(*args, covariance_type='tied', **kwargs):
+    if covariance_type != 'full':
+        raise ValueError('Correlation tied estimation may be requested for "full" covariances only.')
+    return GaussianClassifier(*args, advanced_covariance_type='tied corr', **kwargs)
 
 
 def _exampleNormal(n_features, beta_param=1, random_state=None):

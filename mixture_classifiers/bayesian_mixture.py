@@ -16,7 +16,8 @@ from sklearn.utils.fixes import logsumexp
 from sklearn.utils import check_random_state
 from sklearn.mixture.gaussian_mixture import GaussianMixture, _compute_precision_cholesky, _compute_log_det_cholesky
 from sklearn.mixture.bayesian_mixture import BayesianGaussianMixture as _BaseBayesianGaussianMixture
-from .gaussian_mixture import _full_cov, _tied_cov, _diag_cov, _spherical_cov, _estimate_gaussian_parameters
+from .gaussian_mixture import _full_cov, _tied_cov, _diag_cov, _spherical_cov, \
+    _feature_mapping, _estimate_gaussian_parameters
 
 from sklearn.utils import check_array
 from sklearn.utils.validation import check_is_fitted
@@ -661,7 +662,7 @@ class BayesianGaussianMixture(_BaseBayesianGaussianMixture):
     # TODO: in _check_precision_parameters the prior ddf is required to be >= n_features
     # but formulas can already be evaluated if that is true for the posterior
 
-    def __init__(self, n_components=1, covariance_type='full', tol=1e-3,
+    def __init__(self, n_components=1, covariance_type='full', advanced_covariance_type=None, tol=1e-3,
                  reg_covar=1e-6, max_iter=100, n_init=1, init_params='kmeans', use_weights=True,
                  weight_concentration_prior_type='dirichlet_process',
                  weight_concentration_prior=None,
@@ -670,6 +671,10 @@ class BayesianGaussianMixture(_BaseBayesianGaussianMixture):
                  use_uninformed_prior=False, enforce_valid_posterior_predictive=True,
                  n_integral_points=100, random_state=None, warm_start=False, verbose=0,
                  verbose_interval=10, progress_bar=None):
+        if advanced_covariance_type is None:
+            advanced_covariance_type = covariance_type
+        else:
+            covariance_type = _feature_mapping[advanced_covariance_type].shape
         super(BayesianGaussianMixture, self).__init__(
             n_components=n_components, covariance_type=covariance_type, tol=tol,
             reg_covar=reg_covar, max_iter=max_iter, n_init=n_init, init_params=init_params,
@@ -685,6 +690,7 @@ class BayesianGaussianMixture(_BaseBayesianGaussianMixture):
         self.progress_bar = _no_progress_bar if progress_bar is None else progress_bar
         self.use_uninformed_prior = use_uninformed_prior
         self.enforce_valid_posterior_predictive = enforce_valid_posterior_predictive
+        self.advanced_covariance_type = advanced_covariance_type
         #self._select_prior_checking()
 
     def _check_means_parameters(self, X):
@@ -1094,6 +1100,30 @@ class BayesianGaussianMixture(_BaseBayesianGaussianMixture):
         # Contrary to the original bishop book, we normalize the covariances
         self.covariances_ /= self.degrees_of_freedom_
 
+    def _m_step(self, X, log_resp):
+        """M step.
+
+        Parameters
+        ----------
+        X : array-like, shape (n_samples, n_features)
+
+        log_resp : array-like, shape (n_samples, n_components)
+            Logarithm of the posterior probabilities (or responsibilities) of
+            the point of each sample in X.
+        """
+        n_samples, _ = X.shape
+        random_state = check_random_state(self.random_state)
+
+        covariance_type, tied, fair = _feature_mapping[self.advanced_covariance_type]
+
+        nk, fk, xk, sk = _estimate_gaussian_parameters(
+            X, np.exp(log_resp), self.reg_covar, self.advanced_covariance_type, random_state)
+        if not fair:
+            fk = nk
+        self._estimate_weights(nk)
+        self._estimate_means(nk, xk)
+        self._estimate_precisions(fk, xk, sk)
+
 
 class BayesianGaussianClassifier(MixtureClassifierMixin, BayesianGaussianMixture):
     """Variational Bayesian estimation of a Gaussian mixture.
@@ -1331,7 +1361,7 @@ class BayesianGaussianClassifier(MixtureClassifierMixin, BayesianGaussianMixture
     # TODO: when sampling assign learned class instead of ordinals
     # (this can be done by an overload that hooks to the super class)
 
-    def __init__(self, n_components_per_class=1, covariance_type='full', tol=1e-3,
+    def __init__(self, n_components_per_class=1, covariance_type='full', advanced_covariance_type=None, tol=1e-3,
                  reg_covar=1e-6, max_iter=100, n_init=1, init_params='kmeans', use_weights=True,
                  classes_init=None, weight_concentration_prior_type='dirichlet_process',
                  weight_concentration_prior=None,
@@ -1341,7 +1371,8 @@ class BayesianGaussianClassifier(MixtureClassifierMixin, BayesianGaussianMixture
                  n_integral_points=100, random_state=None, warm_start=False, verbose=0,
                  verbose_interval=10, progress_bar=None):
         BayesianGaussianMixture.__init__(self,
-                                         n_components=n_components_per_class, covariance_type=covariance_type, tol=tol,
+                                         n_components=n_components_per_class, covariance_type=covariance_type,
+                                         advanced_covariance_type=advanced_covariance_type, tol=tol,
                                          reg_covar=reg_covar, max_iter=max_iter, n_init=n_init, init_params=init_params,
                                          use_weights=use_weights,
                                          weight_concentration_prior_type=weight_concentration_prior_type,
@@ -1398,150 +1429,22 @@ class BayesianGaussianClassifier(MixtureClassifierMixin, BayesianGaussianMixture
         self.n_components = len(self.means_)
 
 
-class BayesianFairTiedClassifier(BayesianGaussianClassifier):
-    def __init__(self, n_components_per_class=1, covariance_type='tied', tol=1e-3,
-                 reg_covar=1e-6, max_iter=100, n_init=1, init_params='kmeans', use_weights=True,
-                 classes_init=None, weight_concentration_prior_type='dirichlet_process',
-                 weight_concentration_prior=None,
-                 mean_precision_prior=None, mean_prior=None,
-                 degrees_of_freedom_prior=None, covariance_prior=None,
-                 use_uninformed_prior=False, enforce_valid_posterior_predictive=True,
-                 n_integral_points=100, random_state=None, warm_start=False, verbose=0,
-                 verbose_interval=10, progress_bar=None):
-        if covariance_type != 'tied':
-            raise ValueError('Fair covariance estimation may be requested for tied covariances only.')
-        BayesianGaussianClassifier.__init__(self,
-                                            n_components_per_class=n_components_per_class, covariance_type=covariance_type, tol=tol,
-                                            reg_covar=reg_covar, max_iter=max_iter, n_init=n_init, init_params=init_params,
-                                            use_weights=use_weights, classes_init=classes_init,
-                                            weight_concentration_prior_type=weight_concentration_prior_type,
-                                            weight_concentration_prior=weight_concentration_prior,
-                                            mean_precision_prior=mean_precision_prior, mean_prior=mean_prior,
-                                            degrees_of_freedom_prior=degrees_of_freedom_prior,
-                                            covariance_prior=covariance_prior,
-                                            use_uninformed_prior=use_uninformed_prior,
-                                            enforce_valid_posterior_predictive=enforce_valid_posterior_predictive,
-                                            n_integral_points=n_integral_points, random_state=random_state,
-                                            warm_start=warm_start, verbose=verbose,
-                                            verbose_interval=verbose_interval, progress_bar=progress_bar)
-
-    def _m_step(self, X, log_resp):
-        """M step.
-
-        Parameters
-        ----------
-        X : array-like, shape (n_samples, n_features)
-
-        log_resp : array-like, shape (n_samples, n_components)
-            Logarithm of the posterior probabilities (or responsibilities) of
-            the point of each sample in X.
-        """
-        n_samples, _ = X.shape
-        random_state = check_random_state(self.random_state)
-
-        nk, fk, xk, sk = _estimate_gaussian_parameters(
-            X, np.exp(log_resp), self.reg_covar, 'fair', random_state)
-        self._estimate_weights(nk)
-        self._estimate_means(nk, xk)
-        self._estimate_precisions(fk, xk, sk)
+def BayesianFairTiedClassifier(*args, covariance_type='tied', **kwargs):
+    if covariance_type != 'tied':
+        raise ValueError('Fair covariance estimation may be requested for tied covariances only.')
+    return BayesianGaussianClassifier(*args, advanced_covariance_type='fair', **kwargs)
 
 
-class BayesianDiagTiedClassifier(BayesianGaussianClassifier):
-    def __init__(self, n_components_per_class=1, covariance_type='tied', tol=1e-3,
-                 reg_covar=1e-6, max_iter=100, n_init=1, init_params='kmeans', use_weights=True,
-                 classes_init=None, weight_concentration_prior_type='dirichlet_process',
-                 weight_concentration_prior=None,
-                 mean_precision_prior=None, mean_prior=None,
-                 degrees_of_freedom_prior=None, covariance_prior=None,
-                 use_uninformed_prior=False, enforce_valid_posterior_predictive=True,
-                 n_integral_points=100, random_state=None, warm_start=False, verbose=0,
-                 verbose_interval=10, progress_bar=None):
-        if covariance_type != 'diag':
-            raise ValueError('Diag tied estimation may be requested for "diag" covariances only.')
-        BayesianGaussianClassifier.__init__(self,
-                                            n_components_per_class=n_components_per_class,
-                                            covariance_type=covariance_type, tol=tol,
-                                            reg_covar=reg_covar, max_iter=max_iter, n_init=n_init,
-                                            init_params=init_params,
-                                            use_weights=use_weights, classes_init=classes_init,
-                                            weight_concentration_prior_type=weight_concentration_prior_type,
-                                            weight_concentration_prior=weight_concentration_prior,
-                                            mean_precision_prior=mean_precision_prior, mean_prior=mean_prior,
-                                            degrees_of_freedom_prior=degrees_of_freedom_prior,
-                                            covariance_prior=covariance_prior,
-                                            use_uninformed_prior=use_uninformed_prior,
-                                            enforce_valid_posterior_predictive=enforce_valid_posterior_predictive,
-                                            n_integral_points=n_integral_points, random_state=random_state,
-                                            warm_start=warm_start, verbose=verbose,
-                                            verbose_interval=verbose_interval, progress_bar=progress_bar)
-
-    def _m_step(self, X, log_resp):
-        """M step.
-
-        Parameters
-        ----------
-        X : array-like, shape (n_samples, n_features)
-
-        log_resp : array-like, shape (n_samples, n_components)
-            Logarithm of the posterior probabilities (or responsibilities) of
-            the point of each sample in X.
-        """
-        n_samples, _ = X.shape
-
-        nk, _, xk, sk = _estimate_gaussian_parameters(
-            X, np.exp(log_resp), self.reg_covar, 'tied diag', None)
-        self._estimate_weights(nk)
-        self._estimate_means(nk, xk)
-        self._estimate_precisions(nk, xk, sk)
+def BayesianDiagTiedClassifier(*args, covariance_type='tied', **kwargs):
+    if covariance_type != 'diag':
+        raise ValueError('Diag tied estimation may be requested for "diag" covariances only.')
+    return BayesianGaussianClassifier(*args, advanced_covariance_type='tied diag', **kwargs)
 
 
-class BayesianCorrTiedClassifier(BayesianGaussianClassifier):
-    def __init__(self, n_components_per_class=1, covariance_type='tied', tol=1e-3,
-                 reg_covar=1e-6, max_iter=100, n_init=1, init_params='kmeans', use_weights=True,
-                 classes_init=None, weight_concentration_prior_type='dirichlet_process',
-                 weight_concentration_prior=None,
-                 mean_precision_prior=None, mean_prior=None,
-                 degrees_of_freedom_prior=None, covariance_prior=None,
-                 use_uninformed_prior=False, enforce_valid_posterior_predictive=True,
-                 n_integral_points=100, random_state=None, warm_start=False, verbose=0,
-                 verbose_interval=10, progress_bar=None):
-        if covariance_type != 'full':
-            raise ValueError('Correlation tied estimation may be requested for "full" covariances only.')
-        BayesianGaussianClassifier.__init__(self,
-                                            n_components_per_class=n_components_per_class,
-                                            covariance_type=covariance_type, tol=tol,
-                                            reg_covar=reg_covar, max_iter=max_iter, n_init=n_init,
-                                            init_params=init_params,
-                                            use_weights=use_weights, classes_init=classes_init,
-                                            weight_concentration_prior_type=weight_concentration_prior_type,
-                                            weight_concentration_prior=weight_concentration_prior,
-                                            mean_precision_prior=mean_precision_prior, mean_prior=mean_prior,
-                                            degrees_of_freedom_prior=degrees_of_freedom_prior,
-                                            covariance_prior=covariance_prior,
-                                            use_uninformed_prior=use_uninformed_prior,
-                                            enforce_valid_posterior_predictive=enforce_valid_posterior_predictive,
-                                            n_integral_points=n_integral_points, random_state=random_state,
-                                            warm_start=warm_start, verbose=verbose,
-                                            verbose_interval=verbose_interval, progress_bar=progress_bar)
-
-    def _m_step(self, X, log_resp):
-        """M step.
-
-        Parameters
-        ----------
-        X : array-like, shape (n_samples, n_features)
-
-        log_resp : array-like, shape (n_samples, n_components)
-            Logarithm of the posterior probabilities (or responsibilities) of
-            the point of each sample in X.
-        """
-        n_samples, _ = X.shape
-
-        nk, _, xk, sk = _estimate_gaussian_parameters(
-            X, np.exp(log_resp), self.reg_covar, 'tied corr', None)
-        self._estimate_weights(nk)
-        self._estimate_means(nk, xk)
-        self._estimate_precisions(nk, xk, sk)
+def BayesianCorrTiedClassifier(*args, covariance_type='tied', **kwargs):
+    if covariance_type != 'full':
+        raise ValueError('Correlation tied estimation may be requested for "full" covariances only.')
+    return BayesianGaussianClassifier(*args, advanced_covariance_type='tied corr', **kwargs)
 
 
 def exampleClassifier(n_components, n_features, covariance_type='full', random_state=None):
