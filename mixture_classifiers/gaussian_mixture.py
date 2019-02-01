@@ -11,8 +11,9 @@
 import numpy as np
 
 # sklearn.mixture.gaussian_mixture
-from sklearn.mixture.gaussian_mixture import GaussianMixture, _estimate_gaussian_covariances_tied, \
-    _estimate_gaussian_covariances_diag, _compute_precision_cholesky
+from sklearn.mixture.gaussian_mixture import GaussianMixture, _estimate_gaussian_covariances_full, \
+    _estimate_gaussian_covariances_tied, _estimate_gaussian_covariances_diag, \
+    _estimate_gaussian_covariances_spherical, _compute_precision_cholesky
 from sklearn.utils import check_random_state
 from sklearn.utils import check_array
 from sklearn.utils.validation import check_is_fitted
@@ -22,6 +23,28 @@ from sklearn.mixture.base import _check_X
 
 from sklearn.model_selection import StratifiedKFold
 from .base import MixtureClassifierMixin
+
+
+from collections import namedtuple
+_feature_mapper = namedtuple('_feature_mapper', ['shape', 'tied', 'fair'])
+
+# Effective covariance --> Cov shape in sklearn API; same among components; reduce data amount to 1/n_components
+# (listed here in order of increasing complexity and precision)
+_feature_mapping = {
+    'fair spherical': _feature_mapper('spherical', True, True),
+    'tied spherical': _feature_mapper('spherical', True, False),
+    'spherical': _feature_mapper('spherical', False, False),
+    'fair diag': _feature_mapper('diag', True, True),
+    'tied diag': _feature_mapper('diag', True, False),
+    'diag': _feature_mapper('diag', False, False),
+    'fair': _feature_mapper('tied', True, True),  # covariance values are shared
+    'tied': _feature_mapper('tied', True, False),
+    'fair corr': _feature_mapper('full', True, True),  # correlation coefficients are shared
+    'tied corr': _feature_mapper('full', True, False),
+    'full': _feature_mapper('full', False, False),  # nothing shared
+}
+# Note: although some ties would allow simpler shapes (i.e., for spherical and diag) but rather
+# we use fallback to a broader shape to spare the effort of implementing the corresponding calculations.
 
 
 def _isSquareArray(P):
@@ -65,7 +88,7 @@ def vineCorr(P):
     return S
 
 
-def _estimate_gaussian_covariances_tidi(resp, X, nk, means, reg_covar):
+def _estimate_gaussian_covariances_tied_diag(resp, X, nk, means, reg_covar):
     """Estimate the diagonal-only tied covariance matrix.
 
     Parameters
@@ -86,12 +109,37 @@ def _estimate_gaussian_covariances_tidi(resp, X, nk, means, reg_covar):
         The tied diagonal covariance matrix of the components.
         Note: shape conforms diagonal calculations.
     """
+    del resp
     avg_X2 = np.sum(X * X, axis=0)
     avg_means2 = np.dot(nk, means*means)
     covariance = avg_X2 - avg_means2
     covariance /= nk.sum()
     covariance += reg_covar
     return covariance[np.newaxis, :]
+
+
+def _estimate_gaussian_covariances_tied_spherical(resp, X, nk, means, reg_covar):
+    """Estimate the spherical variance values.
+
+    Parameters
+    ----------
+    responsibilities : array-like, shape (n_samples, n_components)
+
+    X : array-like, shape (n_samples, n_features)
+
+    nk : array-like, shape (n_components,)
+
+    means : array-like, shape (n_components, n_features)
+
+    reg_covar : float
+
+    Returns
+    -------
+    variances : array, shape (1,)
+        The variance values of each components.
+    """
+    return _estimate_gaussian_covariances_tied_diag(resp, X, nk,
+                                                    means, reg_covar).mean(1)
 
 
 def _estimate_gaussian_correlations_tied(resp, X, nk, means, reg_covar):
@@ -126,45 +174,26 @@ def _estimate_gaussian_correlations_tied(resp, X, nk, means, reg_covar):
     return np.array(comp_covariance)
 
 
-def _estimate_tied_gaussian_parameters(X, resp, reg_covar, covariance_type):
-    """Estimate the Gaussian distribution parameters.
-
-    Parameters
-    ----------
-    X : array-like, shape (n_samples, n_features)
-        The input data array.
-
-    resp : array-like, shape (n_samples, n_components)
-        The responsibilities for each data sample in X.
-
-    reg_covar : float
-        The regularization added to the diagonal of the covariance matrices.
-
-    covariance_type : {'diag'}
-        The type of precision matrices.
-
-    Returns
-    -------
-    nk : array-like, shape (n_components,)
-        The numbers of data samples in the current components.
-
-    means : array-like, shape (n_components, n_features)
-        The centers of the current components.
-
-    covariances : array-like
-        The covariance matrix of the current components.
-        The shape depends of the covariance_type.
-    """
-    nk = resp.sum(axis=0) + 10 * np.finfo(resp.dtype).eps
-    means = np.dot(resp.T, X) / nk[:, np.newaxis]
-    # TODO: when merging code to sklearn, change this dict key
-    covariances = {"diag": _estimate_gaussian_covariances_tidi,  # 'tied diagonal'
-                   "full": _estimate_gaussian_correlations_tied,  # 'tied correlation'
-                   }[covariance_type](resp, X, nk, means, reg_covar)
-    return nk, means, covariances
+def _subsampled_statistics(X, resp, random_state):
+    # Subsample data to be comparable with "full" that has fewer data per component
+    n_samples, n_components = resp.shape
+    uni = np.unique(resp)
+    if uni.shape == (2,) and np.all(uni == [0, 1]):
+        labels_ = [hash(tuple(x)) for x in resp]
+        skf = StratifiedKFold(n_splits=n_components, shuffle=True, random_state=random_state)
+        _, select = next(skf.split(X, labels_))
+    else:
+        select = random_state.choice(n_samples, int(n_samples / n_components), replace=False)
+    X_fair = X[select, :]
+    resp_fair = resp[select, :]
+    nk_fair = resp_fair.sum(axis=0) + 10 * np.finfo(resp.dtype).eps
+    # NOTE: it would be appealing to use the more precise means here too
+    # but it may result in an invalid covariance matrix
+    means_fair = np.dot(resp_fair.T, X_fair) / nk_fair[:, np.newaxis]
+    return X_fair, resp_fair, nk_fair, means_fair
 
 
-def _estimate_fair_gaussian_parameters(X, resp, reg_covar, covariance_type, random_state):
+def _estimate_gaussian_parameters(X, resp, reg_covar, advanced_covariance_type, random_state):
     """Estimate the Gaussian distribution parameters.
 
     Parameters
@@ -201,24 +230,29 @@ def _estimate_fair_gaussian_parameters(X, resp, reg_covar, covariance_type, rand
     """
     nk = resp.sum(axis=0) + 10 * np.finfo(resp.dtype).eps
     means = np.dot(resp.T, X) / nk[:, np.newaxis]
-    # Subsample data to be comparable with "full" that has fewer data per component
-    n_samples, n_components = resp.shape
-    uni = np.unique(resp)
-    if uni.shape == (2,) and np.all(uni == [0, 1]):
-        labels_ = [hash(tuple(x)) for x in resp]
-        skf = StratifiedKFold(n_splits=n_components, shuffle=True, random_state=random_state)
-        _, select = next(skf.split(X, labels_))
+
+    covariance_type, tied, fair = _feature_mapping[advanced_covariance_type]
+
+    if fair:
+        X_fair, resp_fair, nk_fair, means_fair = _subsampled_statistics(X, resp, random_state)
+        covariances = {"full": _estimate_gaussian_correlations_tied,
+                       "tied": _estimate_gaussian_covariances_tied,
+                       "diag": _estimate_gaussian_covariances_tied_diag,
+                       "spherical": _estimate_gaussian_covariances_tied_spherical
+                       }[covariance_type](resp_fair, X_fair, nk_fair, means_fair, reg_covar)
+    elif tied:
+        covariances = {"full": _estimate_gaussian_correlations_tied,
+                       "tied": _estimate_gaussian_covariances_tied,
+                       "diag": _estimate_gaussian_covariances_tied_diag,
+                       "spherical": _estimate_gaussian_covariances_tied_spherical
+                       }[covariance_type](resp, X, nk, means, reg_covar)
+        nk_fair = nk
     else:
-        select = random_state.choice(n_samples, int(n_samples / n_components), replace=False)
-    X_fair = X[select, :]
-    resp_fair = resp[select, :]
-    nk_fair = resp_fair.sum(axis=0) + 10 * np.finfo(resp.dtype).eps
-    # NOTE: it would be appealing to use the more precise means here too
-    # but it may result in an invalid covariance matrix
-    means_fair = np.dot(resp_fair.T, X_fair) / nk_fair[:, np.newaxis]
-    covariances = {"tied": _estimate_gaussian_covariances_tied,  # 'tied'
-                   "full": _estimate_gaussian_correlations_tied,  # 'tied correlation'
-                   }[covariance_type](resp_fair, X_fair, nk_fair, means_fair, reg_covar)
+        covariances = {"full": _estimate_gaussian_covariances_full,
+                       "diag": _estimate_gaussian_covariances_diag,
+                       "spherical": _estimate_gaussian_covariances_spherical
+                       }[covariance_type](resp, X, nk, means, reg_covar)
+        nk_fair = nk
     return nk, nk_fair, means, covariances
 
 
@@ -499,8 +533,8 @@ class FairTiedClassifier(GaussianClassifier):
         n_samples, _ = X.shape
         random_state = check_random_state(self.random_state)
         self.weights_, _, self.means_, self.covariances_ = (
-            _estimate_fair_gaussian_parameters(X, np.exp(log_resp), self.reg_covar,
-                                               self.covariance_type, random_state))
+            _estimate_gaussian_parameters(X, np.exp(log_resp), self.reg_covar,
+                                          'fair', random_state))
         self.weights_ /= n_samples
         self.precisions_cholesky_ = _compute_precision_cholesky(
             self.covariances_, self.covariance_type)
@@ -535,8 +569,8 @@ class DiagTiedClassifier(GaussianClassifier):
         """
         # TODO: provide reliable class info to stratified subsampling if multiple components per class used.
         n_samples, _ = X.shape
-        self.weights_, self.means_, self.covariances_ = (
-            _estimate_tied_gaussian_parameters(X, np.exp(log_resp), self.reg_covar, self.covariance_type))
+        self.weights_, _, self.means_, self.covariances_ = (
+            _estimate_gaussian_parameters(X, np.exp(log_resp), self.reg_covar, 'tied diag', None))
         self.weights_ /= n_samples
         self.precisions_cholesky_ = _compute_precision_cholesky(
             self.covariances_, self.covariance_type)
@@ -571,8 +605,8 @@ class CorrTiedClassifier(GaussianClassifier):
         """
         # TODO: provide reliable class info to stratified subsampling if multiple components per class used.
         n_samples, _ = X.shape
-        self.weights_, self.means_, self.covariances_ = (
-            _estimate_tied_gaussian_parameters(X, np.exp(log_resp), self.reg_covar, self.covariance_type))
+        self.weights_, _, self.means_, self.covariances_ = (
+            _estimate_gaussian_parameters(X, np.exp(log_resp), self.reg_covar, 'tied corr', None))
         self.weights_ /= n_samples
         self.precisions_cholesky_ = _compute_precision_cholesky(
             self.covariances_, self.covariance_type)

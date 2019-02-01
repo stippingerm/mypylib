@@ -16,8 +16,7 @@ from sklearn.utils.fixes import logsumexp
 from sklearn.utils import check_random_state
 from sklearn.mixture.gaussian_mixture import GaussianMixture, _compute_precision_cholesky, _compute_log_det_cholesky
 from sklearn.mixture.bayesian_mixture import BayesianGaussianMixture as _BaseBayesianGaussianMixture
-from .gaussian_mixture import (_full_cov, _tied_cov, _diag_cov, _spherical_cov,
-                               _estimate_fair_gaussian_parameters, _estimate_tied_gaussian_parameters)
+from .gaussian_mixture import _full_cov, _tied_cov, _diag_cov, _spherical_cov, _estimate_gaussian_parameters
 
 from sklearn.utils import check_array
 from sklearn.utils.validation import check_is_fitted
@@ -1440,8 +1439,8 @@ class BayesianFairTiedClassifier(BayesianGaussianClassifier):
         n_samples, _ = X.shape
         random_state = check_random_state(self.random_state)
 
-        nk, fk, xk, sk = _estimate_fair_gaussian_parameters(
-            X, np.exp(log_resp), self.reg_covar, self.covariance_type, random_state)
+        nk, fk, xk, sk = _estimate_gaussian_parameters(
+            X, np.exp(log_resp), self.reg_covar, 'fair', random_state)
         self._estimate_weights(nk)
         self._estimate_means(nk, xk)
         self._estimate_precisions(fk, xk, sk)
@@ -1489,8 +1488,8 @@ class BayesianDiagTiedClassifier(BayesianGaussianClassifier):
         """
         n_samples, _ = X.shape
 
-        nk, xk, sk = _estimate_tied_gaussian_parameters(
-            X, np.exp(log_resp), self.reg_covar, self.covariance_type)
+        nk, _, xk, sk = _estimate_gaussian_parameters(
+            X, np.exp(log_resp), self.reg_covar, 'tied diag', None)
         self._estimate_weights(nk)
         self._estimate_means(nk, xk)
         self._estimate_precisions(nk, xk, sk)
@@ -1538,8 +1537,8 @@ class BayesianCorrTiedClassifier(BayesianGaussianClassifier):
         """
         n_samples, _ = X.shape
 
-        nk, xk, sk = _estimate_tied_gaussian_parameters(
-            X, np.exp(log_resp), self.reg_covar, self.covariance_type)
+        nk, _, xk, sk = _estimate_gaussian_parameters(
+            X, np.exp(log_resp), self.reg_covar, 'tied corr', None)
         self._estimate_weights(nk)
         self._estimate_means(nk, xk)
         self._estimate_precisions(nk, xk, sk)
