@@ -12,7 +12,7 @@ import numpy as np
 
 # sklearn.mixture.gaussian_mixture
 from sklearn.mixture.gaussian_mixture import GaussianMixture, _estimate_gaussian_covariances_tied, \
-    _compute_precision_cholesky
+    _estimate_gaussian_covariances_diag, _compute_precision_cholesky
 from sklearn.utils import check_random_state
 from sklearn.utils import check_array
 from sklearn.utils.validation import check_is_fitted
@@ -66,7 +66,7 @@ def vineCorr(P):
 
 
 def _estimate_gaussian_covariances_tidi(resp, X, nk, means, reg_covar):
-    """Estimate the tied covariance matrix.
+    """Estimate the diagonal-only tied covariance matrix.
 
     Parameters
     ----------
@@ -94,7 +94,39 @@ def _estimate_gaussian_covariances_tidi(resp, X, nk, means, reg_covar):
     return covariance[np.newaxis, :]
 
 
-def _estimate_tidi_gaussian_parameters(X, resp, reg_covar, covariance_type):
+def _estimate_gaussian_correlations_tied(resp, X, nk, means, reg_covar):
+    """Estimate the tied correlation matrix. Then obtain covariance matrix by scaling
+    it using component-wise variances.
+
+    Parameters
+    ----------
+    resp : array-like, shape (n_samples, n_components)
+
+    X : array-like, shape (n_samples, n_features)
+
+    nk : array-like, shape (n_components,)
+
+    means : array-like, shape (n_components, n_features)
+
+    reg_covar : float
+
+    Returns
+    -------
+    covariance : array, shape (n_components, n_features, n_features)
+        The correlation-tied covariance matrix of the components.
+    """
+    # TODO: fair estimation would be interesting but does not fit current framework:
+    # corr needs subsampled data while var can work on the original data
+    tied_covariance = _estimate_gaussian_covariances_tied(resp, X, nk, means, reg_covar)
+    tied_inv_scaler = 1.0 / np.sqrt(np.diag(tied_covariance))
+    tied_correlation = np.outer(tied_inv_scaler, tied_inv_scaler) * tied_covariance
+    comp_variances = _estimate_gaussian_covariances_diag(resp, X, nk, means, reg_covar)
+    comp_scaler = [np.outer(c, c) for c in np.sqrt(comp_variances)]
+    comp_covariance = [tied_correlation * s for s in comp_scaler]
+    return np.array(comp_covariance)
+
+
+def _estimate_tied_gaussian_parameters(X, resp, reg_covar, covariance_type):
     """Estimate the Gaussian distribution parameters.
 
     Parameters
@@ -125,8 +157,9 @@ def _estimate_tidi_gaussian_parameters(X, resp, reg_covar, covariance_type):
     """
     nk = resp.sum(axis=0) + 10 * np.finfo(resp.dtype).eps
     means = np.dot(resp.T, X) / nk[:, np.newaxis]
-    # TODO: when megring code to sklearn, change this dict key
-    covariances = {"diag": _estimate_gaussian_covariances_tidi,
+    # TODO: when merging code to sklearn, change this dict key
+    covariances = {"diag": _estimate_gaussian_covariances_tidi,  # 'tied diagonal'
+                   "full": _estimate_gaussian_correlations_tied,  # 'tied correlation'
                    }[covariance_type](resp, X, nk, means, reg_covar)
     return nk, means, covariances
 
@@ -183,7 +216,8 @@ def _estimate_fair_gaussian_parameters(X, resp, reg_covar, covariance_type, rand
     # NOTE: it would be appealing to use the more precise means here too
     # but it may result in an invalid covariance matrix
     means_fair = np.dot(resp_fair.T, X_fair) / nk_fair[:, np.newaxis]
-    covariances = {"tied": _estimate_gaussian_covariances_tied,
+    covariances = {"tied": _estimate_gaussian_covariances_tied,  # 'tied'
+                   "full": _estimate_gaussian_correlations_tied,  # 'tied correlation'
                    }[covariance_type](resp_fair, X_fair, nk_fair, means_fair, reg_covar)
     return nk, nk_fair, means, covariances
 
@@ -501,9 +535,44 @@ class DiagTiedClassifier(GaussianClassifier):
         """
         # TODO: provide reliable class info to stratified subsampling if multiple components per class used.
         n_samples, _ = X.shape
-        random_state = check_random_state(self.random_state)
         self.weights_, self.means_, self.covariances_ = (
-            _estimate_tidi_gaussian_parameters(X, np.exp(log_resp), self.reg_covar, self.covariance_type))
+            _estimate_tied_gaussian_parameters(X, np.exp(log_resp), self.reg_covar, self.covariance_type))
+        self.weights_ /= n_samples
+        self.precisions_cholesky_ = _compute_precision_cholesky(
+            self.covariances_, self.covariance_type)
+
+
+class CorrTiedClassifier(GaussianClassifier):
+    def __init__(self, n_components=1, covariance_type='tied', tol=1e-3,
+                 reg_covar=1e-6, max_iter=100, n_init=1, init_params='kmeans',
+                 classes_init=None, weights_init=None, use_weights=True, means_init=None, precisions_init=None,
+                 random_state=None, warm_start=False,
+                 verbose=0, verbose_interval=10):
+        if covariance_type != 'full':
+            raise ValueError('Correlation tied estimation may be requested for "full" covariances only.')
+        GaussianClassifier.__init__(self,
+                                    n_components_per_class=n_components, covariance_type=covariance_type, tol=tol,
+                                    reg_covar=reg_covar, max_iter=max_iter, n_init=n_init, init_params=init_params,
+                                    classes_init=classes_init, weights_init=weights_init, use_weights=use_weights,
+                                    means_init=means_init, precisions_init=precisions_init,
+                                    random_state=random_state, warm_start=warm_start, verbose=verbose,
+                                    verbose_interval=verbose_interval)
+
+    def _m_step(self, X, log_resp):
+        """M step.
+
+        Parameters
+        ----------
+        X : array-like, shape (n_samples, n_features)
+
+        log_resp : array-like, shape (n_samples, n_components)
+            Logarithm of the posterior probabilities (or responsibilities) of
+            the point of each sample in X.
+        """
+        # TODO: provide reliable class info to stratified subsampling if multiple components per class used.
+        n_samples, _ = X.shape
+        self.weights_, self.means_, self.covariances_ = (
+            _estimate_tied_gaussian_parameters(X, np.exp(log_resp), self.reg_covar, self.covariance_type))
         self.weights_ /= n_samples
         self.precisions_cholesky_ = _compute_precision_cholesky(
             self.covariances_, self.covariance_type)
@@ -518,40 +587,62 @@ def _exampleNormal(n_features, beta_param=1, random_state=None):
     return np.dot(np.dot(amp, vineCorr(P)), amp)
 
 
-def _fullCorr(n_components, n_features, beta_param=1, random_state=None):
-    corr = [_exampleNormal(n_features, beta_param, random_state) for _ in range(0, n_components)]
-    inv = [np.linalg.inv(a) for a in corr]
-    return np.array(corr), np.array(inv)
+def _full_cov(n_components, n_features, beta_param=1, random_state=None):
+    cov = [_exampleNormal(n_features, beta_param, random_state) for _ in range(0, n_components)]
+    inv = [np.linalg.inv(a) for a in cov]
+    return np.array(cov), np.array(inv)
 
 
-def _tiedCorr(n_components, n_features, beta_param=1, random_state=None):
+def _tied_cov(n_components, n_features, beta_param=1, random_state=None):
     del n_components
-    corr = _exampleNormal(n_features, beta_param, random_state)
-    inv = np.linalg.inv(corr)
-    return corr, inv
+    cov = _exampleNormal(n_features, beta_param, random_state)
+    inv = np.linalg.inv(cov)
+    return cov, inv
 
 
-def _diagCorr(n_components, n_features, expon_param=1, random_state=None):
+def _tied_corr(n_components, n_features, beta_param=1, expon_param=1, random_state=None):
     from scipy.stats import expon
-    corr = expon.rvs(0, expon_param, size=(n_components, n_features), random_state=random_state)
-    inv = 1.0 / corr
-    return corr, inv
+    tied_cov = _exampleNormal(n_features, beta_param, random_state)
+    tied_inv_scaler = np.sqrt(np.diag(tied_cov))
+    tied_corr = np.outer(tied_inv_scaler, tied_inv_scaler) * tied_cov
+    comp_var = expon.rvs(0, expon_param, size=(n_components, n_features), random_state=random_state)
+    comp_scaler = [np.outer(c, c) for c in np.sqrt(comp_var)]
+    comp_cov = [tied_corr * s for s in comp_scaler]
+    cov = np.array(comp_cov)
+    inv = np.linalg.inv(cov)
+    return cov, inv
 
 
-def _sphericalCorr(n_components, n_features, expon_param=1, random_state=None):
+def _tidi_cov(n_components, n_features, expon_param=1, random_state=None):
+    from scipy.stats import expon
+    cov = expon.rvs(0, expon_param, size=(1, n_features), random_state=random_state)
+    cov = np.repeat(cov, n_components, axis=0)
+    inv = 1.0 / cov
+    return cov, inv
+
+
+def _diag_cov(n_components, n_features, expon_param=1, random_state=None):
+    from scipy.stats import expon
+    cov = expon.rvs(0, expon_param, size=(n_components, n_features), random_state=random_state)
+    inv = 1.0 / cov
+    return cov, inv
+
+
+def _spherical_cov(n_components, n_features, expon_param=1, random_state=None):
     from scipy.stats import expon
     del n_features
-    corr = expon.rvs(0, expon_param, size=(n_components,), random_state=random_state)
-    inv = 1.0 / corr
-    return corr, inv
+    cov = expon.rvs(0, expon_param, size=(n_components,), random_state=random_state)
+    inv = 1.0 / cov
+    return cov, inv
 
 
 def exampleClassifier(n_components, n_features, covariance_type='full', random_state=None):
     from scipy.stats import norm
     weights = np.full((n_components,), 1.0 / n_components)
     means = norm.rvs(0, 1, size=(n_components, n_features), random_state=random_state)
-    covariances, precisions = {'full': _fullCorr, 'tied': _tiedCorr, 'diag': _diagCorr,
-                               'spherical': _sphericalCorr}[covariance_type](n_components, n_features,
+    covariances, precisions = {'full': _full_cov, 'tied': _tied_cov, 'diag': _diag_cov,
+                               'tidi': _tidi_cov, 'tied_corr': _tied_corr,
+                               'spherical': _spherical_cov}[covariance_type](n_components, n_features,
                                                                              random_state=random_state)
     classes = np.arange(n_components)
     clf = GaussianClassifier(n_components_per_class=1, covariance_type=covariance_type, random_state=random_state)
