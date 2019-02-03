@@ -145,7 +145,8 @@ def _estimate_gaussian_covariances_tied_spherical(resp, X, nk, means, reg_covar)
                                                     means, reg_covar).mean(1)
 
 
-def _estimate_gaussian_correlations_tied(resp, X, nk, means, reg_covar):
+def _estimate_gaussian_correlations_tied(resp, X, nk, means, reg_covar,
+                                         resp_fair=None, X_fair=None, nk_fair=None, means_fair=None):
     """Estimate the tied correlation matrix. Then obtain covariance matrix by scaling
     it using component-wise variances.
 
@@ -166,9 +167,16 @@ def _estimate_gaussian_correlations_tied(resp, X, nk, means, reg_covar):
     covariance : array, shape (n_components, n_features, n_features)
         The correlation-tied covariance matrix of the components.
     """
-    # TODO: fair estimation would be interesting but does not fit current framework:
-    # corr needs subsampled data while var can work on the original data
-    tied_covariance = _estimate_gaussian_covariances_tied(resp, X, nk, means, reg_covar)
+    # Note: maybe we should require to either provide all or none of the fair parameters
+    if resp_fair is None:
+        resp_fair = resp
+    if X_fair is None:
+        X_fair = X
+    if nk_fair is None:
+        nk_fair = nk
+    if means_fair is None:
+        means_fair = means
+    tied_covariance = _estimate_gaussian_covariances_tied(resp_fair, X_fair, nk_fair, means_fair, reg_covar)
     tied_inv_scaler = 1.0 / np.sqrt(np.diag(tied_covariance))
     tied_correlation = np.outer(tied_inv_scaler, tied_inv_scaler) * tied_covariance
     comp_variances = _estimate_gaussian_covariances_diag(resp, X, nk, means, reg_covar)
@@ -238,11 +246,15 @@ def _estimate_gaussian_parameters(X, resp, reg_covar, advanced_covariance_type, 
 
     if fair:
         X_fair, resp_fair, nk_fair, means_fair = _subsampled_statistics(X, resp, random_state)
-        covariances = {"full": _estimate_gaussian_correlations_tied,
-                       "tied": _estimate_gaussian_covariances_tied,
-                       "diag": _estimate_gaussian_covariances_tied_diag,
-                       "spherical": _estimate_gaussian_covariances_tied_spherical
-                       }[covariance_type](resp_fair, X_fair, nk_fair, means_fair, reg_covar)
+        if covariance_type == 'full':
+            covariances = _estimate_gaussian_correlations_tied(
+                resp, X, nk, means, reg_covar, resp_fair, X_fair, nk_fair, means_fair
+            )
+        else:
+            covariances = {"tied": _estimate_gaussian_covariances_tied,
+                           "diag": _estimate_gaussian_covariances_tied_diag,
+                           "spherical": _estimate_gaussian_covariances_tied_spherical
+                           }[covariance_type](resp_fair, X_fair, nk_fair, means_fair, reg_covar)
     elif tied:
         covariances = {"full": _estimate_gaussian_correlations_tied,
                        "tied": _estimate_gaussian_covariances_tied,
